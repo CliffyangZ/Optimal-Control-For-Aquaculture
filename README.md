@@ -1,12 +1,12 @@
 # Aquaculture_CV_Project
 
-## Software Architecture
-
-### System Architecture
+## 1. System Architecture
 ![System Architecture](assets/Sys_Arch.drawio.svg)
 
+## 2. Software Architecture
+......
 
-## Hardware Components
+## 3. Hardware Components
 
 ### The Brain
 - MPU (Rasperry Pi Zero 2W)
