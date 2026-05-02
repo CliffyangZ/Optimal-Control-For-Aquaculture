@@ -4,8 +4,12 @@
 ![System Architecture](assets/Sys_Arch.drawio.svg)
 
 ## 2. Software Architecture
+
+![Software Architecture](assets/software_arch.drawio.svg)
+
 Aquaculture_CV_Project/
-├── assets/                  
+├── assets/                
+│  
 ├── config/
 │   
 ├── streaming/
