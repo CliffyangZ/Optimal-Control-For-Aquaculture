@@ -1,7 +1,7 @@
 # Aquaculture_CV_Project
 
 ## 1. System Architecture
-![System Architecture](assets/Sys_arch.drawio.svg)
+![System Architecture](assets/Sys_Arch.drawio.svg)
 
 ## 2. Software Architecture
 
