@@ -5,24 +5,20 @@
 
 ## 2. Software Architecture
 Aquaculture_CV_Project/
-├── assets/                  # 新增：存放靜態資源、Icon、或測試短片
+├── assets/                  
 ├── config/
-│   └── settings.py
+│   
 ├── streaming/
-│   └── 
+│   
 ├── core/
-│   ├── vision_engine.py
-│   ├── logic_handler.py
 │   
 ├── drivers/
-│   ├── camera_stream.py
-│   └── actuator.py
+│   
 ├── web/
-│   ├── app.py
-│   └── components/          # 新增：拆分 Streamlit 的側邊欄、圖表等組件
+│          
 ├── data/                    # 新增：存放 Log 與辨識截圖
-│   └── captures/
-├── main.py                  # 若採方案 A，此檔案可作為啟動檢查腳本
+│   
+├── main.py                  
 
 ## 3. Development Principles
 
