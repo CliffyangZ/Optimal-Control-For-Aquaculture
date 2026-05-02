@@ -1,1 +1,3 @@
-# 影像辨識演算法
+# Core Module
+
+Core computer vision and ripple detection algorithms for aquaculture monitoring.

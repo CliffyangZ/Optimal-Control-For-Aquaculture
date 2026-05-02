@@ -1,3 +1,3 @@
-# 無人機系統的終端介面
+# Web Module
 
-能夠顯示實時傳輸的鏡頭畫面
+Streamlit user interface for real-time monitoring and operator controls. Displays live camera frames with ripple detection results and system health status.
