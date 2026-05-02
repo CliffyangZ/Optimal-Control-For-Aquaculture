@@ -11,14 +11,9 @@
 
 ```text
 Aquaculture_CV_Project/
-├── assets/
-│   ├── Sys_arch.drawio.svg
-│   └── software_arch.drawio.svg
 ├── config/
 │   └── setting.py
 ├── core/
-│   ├── __init__.py
-│   ├── README.md
 │   ├── activity_levels.py
 │   ├── models.py
 │   ├── ripple_detector.py
@@ -26,29 +21,12 @@ Aquaculture_CV_Project/
 ├── drivers/
 │   └── README.md
 ├── streaming/
-│   ├── __init__.py
 │   └── latest_frame_reader.py
 ├── validation/
-│   ├── __init__.py
 │   ├── clip_manifest.py
-│   ├── clips.example.yml
-│   ├── clips.local.yml
 │   └── run_clip_validation.py
-├── web/
-│   ├── README.md
-│   └── app.py
-├── tests/
-│   ├── integration/
-│   └── unit/
-├── specs/
-│   └── 001-rtsp-ripple-monitoring/
-├── doc/
-│   └── hardware_spec/
-├── Dockerfile.mediamtx
-├── mediamtx.yml
-├── pyproject.toml
-├── develop.md
-└── README.md
+└── web/
+    └── app.py
 ```
 
 ## 3. Development Principles
