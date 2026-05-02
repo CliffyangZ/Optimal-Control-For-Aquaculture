@@ -1,28 +1,55 @@
 # Aquaculture_CV_Project
 
 ## 1. System Architecture
-![System Architecture](assets/Sys_Arch.drawio.svg)
+![System Architecture](assets/Sys_arch.drawio.svg)
 
 ## 2. Software Architecture
 
 ![Software Architecture](assets/software_arch.drawio.svg)
 
+### File Structure
+
+```text
 Aquaculture_CV_Project/
-├── assets/                
-│  
+├── assets/
+│   ├── Sys_arch.drawio.svg
+│   └── software_arch.drawio.svg
 ├── config/
-│   
-├── streaming/
-│   
+│   └── setting.py
 ├── core/
-│   
+│   ├── __init__.py
+│   ├── README.md
+│   ├── activity_levels.py
+│   ├── models.py
+│   ├── ripple_detector.py
+│   └── stream_health.py
 ├── drivers/
-│   
+│   └── README.md
+├── streaming/
+│   ├── __init__.py
+│   └── latest_frame_reader.py
+├── validation/
+│   ├── __init__.py
+│   ├── clip_manifest.py
+│   ├── clips.example.yml
+│   ├── clips.local.yml
+│   └── run_clip_validation.py
 ├── web/
-│          
-├── data/                    # 新增：存放 Log 與辨識截圖
-│   
-├── main.py                  
+│   ├── README.md
+│   └── app.py
+├── tests/
+│   ├── integration/
+│   └── unit/
+├── specs/
+│   └── 001-rtsp-ripple-monitoring/
+├── doc/
+│   └── hardware_spec/
+├── Dockerfile.mediamtx
+├── mediamtx.yml
+├── pyproject.toml
+├── develop.md
+└── README.md
+```
 
 ## 3. Development Principles
 
