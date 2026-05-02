@@ -1,6 +1,7 @@
 """RTSP frame acquisition with latest-frame-only buffering."""
 
 import cv2
+import os
 import threading
 import time
 from datetime import datetime
@@ -106,7 +107,10 @@ class LatestFrameReader:
     def _start_capture(self) -> None:
         """Open RTSP connection with optimized buffer settings."""
         try:
-            self._capture = cv2.VideoCapture(self.stream_url)
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;0"
+            )
+            self._capture = cv2.VideoCapture(self.stream_url, cv2.CAP_FFMPEG)
             self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             self._capture.set(cv2.CAP_PROP_FPS, 30)
         except Exception:

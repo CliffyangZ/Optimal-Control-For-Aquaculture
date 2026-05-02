@@ -14,6 +14,13 @@ from core.stream_health import StreamHealthMonitor
 from config.setting import LOCAL_TRUSTED_NETWORK_ONLY, STREAM_URL
 
 
+MONITORING_STATES = {
+    StreamHealthState.ACTIVE,
+    StreamHealthState.INTERRUPTED,
+    StreamHealthState.DETECTION_UNAVAILABLE,
+}
+
+
 def initialize_session_state():
     """Initialize or retrieve session state."""
     if "session" not in st.session_state:
@@ -29,6 +36,8 @@ def initialize_session_state():
         st.session_state.health_monitor = StreamHealthMonitor()
     if "last_detection_time" not in st.session_state:
         st.session_state.last_detection_time = None
+    if "last_detected_sequence" not in st.session_state:
+        st.session_state.last_detected_sequence = None
 
 
 def format_time_delta(start: datetime, end: datetime = None) -> str:
@@ -113,7 +122,11 @@ def main():
                 if st.session_state.frame_reader is None:
                     st.session_state.frame_reader = LatestFrameReader(STREAM_URL)
                     st.session_state.frame_reader.start()
+                session.started_at = datetime.now()
+                session.stopped_at = None
                 session.health_state = StreamHealthState.ACTIVE
+                st.session_state.last_detection_time = None
+                st.session_state.last_detected_sequence = None
                 st.rerun()
 
         with col_right:
@@ -124,6 +137,9 @@ def main():
                 session.health_state = StreamHealthState.WAITING
                 session.latest_frame = None
                 session.latest_detection = None
+                session.stopped_at = datetime.now()
+                st.session_state.last_detection_time = None
+                st.session_state.last_detected_sequence = None
                 st.rerun()
 
     view_mode = st.radio(
@@ -137,18 +153,19 @@ def main():
     video_placeholder = st.empty()
     status_placeholder = st.empty()
     metrics_placeholder = st.empty()
+    detection_message_placeholder = st.empty()
 
     frame_reader = st.session_state.frame_reader
 
     if session.health_state == StreamHealthState.WAITING:
         st.info("Click **Start** to begin monitoring the stream.")
 
-    elif session.health_state in [StreamHealthState.ACTIVE, StreamHealthState.INTERRUPTED]:
+    elif session.health_state in MONITORING_STATES:
         if frame_reader is None:
             st.error("Frame reader not initialized. Click Start again.")
 
         else:
-            while session.health_state in [StreamHealthState.ACTIVE, StreamHealthState.INTERRUPTED]:
+            while session.health_state in MONITORING_STATES:
                 latest_frame = frame_reader.get_latest_frame()
                 last_frame_time = frame_reader.get_last_frame_time()
 
@@ -170,14 +187,20 @@ def main():
                     if (datetime.now() - session.started_at).total_seconds() > 3:
                         session.health_state = StreamHealthState.INTERRUPTED
 
-                detection_result = None
-                if latest_frame:
+                detection_result = session.latest_detection
+                if (
+                    latest_frame
+                    and latest_frame.sequence_number != st.session_state.last_detected_sequence
+                ):
                     detection_result = detector.detect(latest_frame)
                     session.latest_detection = detection_result
                     st.session_state.last_detection_time = datetime.now()
+                    st.session_state.last_detected_sequence = latest_frame.sequence_number
 
                     if detection_result.status.value == "unavailable":
                         session.health_state = StreamHealthState.DETECTION_UNAVAILABLE
+                    elif session.health_state == StreamHealthState.DETECTION_UNAVAILABLE:
+                        session.health_state = StreamHealthState.ACTIVE
 
                 with status_placeholder.container():
                     st.subheader(f"Status: {session.health_state.value}")
@@ -192,7 +215,7 @@ def main():
                             )
 
                     display_frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-                    video_placeholder.image(display_frame_rgb, use_column_width=True)
+                    video_placeholder.image(display_frame_rgb, width="stretch")
 
                     with metrics_placeholder.container():
                         metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
@@ -227,7 +250,11 @@ def main():
                                 st.metric("Activity Level", "—")
 
                     if detection_result and detection_result.status.value == "unavailable":
-                        st.warning(f"⚠️ Detection Unavailable: {detection_result.reason}")
+                        detection_message_placeholder.warning(
+                            f"Detection Unavailable: {detection_result.reason}"
+                        )
+                    else:
+                        detection_message_placeholder.empty()
 
                 time.sleep(0.05)
 

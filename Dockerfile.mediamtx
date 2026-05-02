@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1
+
+# MediaMTX image variant with FFmpeg and Raspberry Pi camera support.
+# Use this on Raspberry Pi with the runtime flags documented in README.md.
+FROM bluenviron/mediamtx:1-ffmpeg-rpi
+
+COPY mediamtx.yml /mediamtx.yml
+
+ENV MTX_RTSPTRANSPORTS=tcp
+
+EXPOSE 8554/tcp
+
+ENTRYPOINT ["/mediamtx"]
+CMD ["/mediamtx.yml"]

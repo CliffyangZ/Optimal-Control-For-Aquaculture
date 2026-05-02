@@ -1,0 +1,26 @@
+logLevel: info
+
+# Keep the relay RTSP-only for the local monitoring MVP.
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+
+paths:
+  # Smartphone or FFmpeg publisher target:
+  # rtsp://<relay-host>:8554/drone_live
+  drone_live:
+    source: publisher
+
+  # Raspberry Pi Camera source when running on a Raspberry Pi.
+  # Read from rtsp://<relay-host>:8554/cam
+  cam:
+    source: rpiCamera
+    sourceOnDemand: yes
+    rpiCameraWidth: 1280
+    rpiCameraHeight: 720
+    rpiCameraFPS: 30

@@ -52,6 +52,33 @@ The ripple monitoring feature requires a local RTSP relay (MediaMTX) to accept a
    ```
 3. The relay will expose the default RTSP path for publishing: `rtsp://127.0.0.1:8554/`
 
+### MediaMTX Docker Setup
+
+Build the local MediaMTX image with FFmpeg and Raspberry Pi camera support:
+
+```bash
+docker build -f Dockerfile.mediamtx -t aquaculture-mediamtx .
+```
+
+Run as an RTSP relay for a phone or FFmpeg publisher:
+
+```bash
+docker run --rm -it -p 8554:8554 aquaculture-mediamtx
+```
+
+Run on Raspberry Pi when using the Pi camera path `rtsp://<pi-host>:8554/cam`:
+
+```bash
+docker run --rm -it \
+  --network=host \
+  --privileged \
+  --tmpfs /dev/shm:exec \
+  -v /run/udev:/run/udev:ro \
+  aquaculture-mediamtx
+```
+
+The Docker configuration is in `mediamtx.yml`. It exposes RTSP over TCP on port `8554`, accepts external publishers at `/drone_live`, and exposes the Raspberry Pi camera at `/cam` when available.
+
 ### Smartphone Stream Configuration
 
 Configure your smartphone camera app to publish to: `rtsp://127.0.0.1:8554/drone_live`
