@@ -52,45 +52,58 @@ Aquaculture_CV_Project/
 
 The ripple monitoring feature requires a local RTSP relay (MediaMTX) to accept a smartphone camera stream and expose it to the application.
 
-### MediaMTX Setup
+### MediaMTX Setup Without Docker
 
 1. Download MediaMTX from https://github.com/bluenviron/mediamtx/releases
-2. Start the relay with the default configuration:
+2. Start the relay with the desktop configuration:
    ```bash
-   ./mediamtx
+   ./mediamtx mediamtx.desktop.yml
    ```
-3. The relay will expose the default RTSP path for publishing: `rtsp://127.0.0.1:8554/`
+3. The relay will expose the smartphone publishing path at `rtsp://<relay-host>:8554/drone_live`.
 
-### MediaMTX Docker Setup
+### MediaMTX Docker Setup: Windows, macOS, and Linux
 
-Build the local MediaMTX image with FFmpeg and Raspberry Pi camera support:
+Use the official generic MediaMTX image for desktop operating systems:
+
+```bash
+docker compose -f compose.mediamtx.desktop.yml up
+```
+
+This uses `mediamtx.desktop.yml`, which accepts external publishers at `/drone_live` and does not include Raspberry Pi camera-only settings.
+
+### MediaMTX Docker Setup: Raspberry Pi Camera
+
+Use the Raspberry Pi compose file only when the relay host is a Raspberry Pi and the `/cam` path should read from the Pi camera:
+
+```bash
+docker compose -f compose.mediamtx.rpi.yml up
+```
+
+This uses `mediamtx.rpi.yml`, exposes `/drone_live` for phone or FFmpeg publishers, and exposes `/cam` for the Raspberry Pi camera when available.
+
+The legacy Raspberry Pi image can still be built manually if needed:
 
 ```bash
 docker build -f Dockerfile.mediamtx -t aquaculture-mediamtx .
 ```
 
-Run as an RTSP relay for a phone or FFmpeg publisher:
+### MediaMTX Configuration Files
 
-```bash
-docker run --rm -it -p 8554:8554 aquaculture-mediamtx
-```
-
-Run on Raspberry Pi when using the Pi camera path `rtsp://<pi-host>:8554/cam`:
-
-```bash
-docker run --rm -it \
-  --network=host \
-  --privileged \
-  --tmpfs /dev/shm:exec \
-  -v /run/udev:/run/udev:ro \
-  aquaculture-mediamtx
-```
-
-The Docker configuration is in `mediamtx.yml`. It exposes RTSP over TCP on port `8554`, accepts external publishers at `/drone_live`, and exposes the Raspberry Pi camera at `/cam` when available.
+- `mediamtx.yml`: default desktop-compatible configuration.
+- `mediamtx.desktop.yml`: explicit Windows, macOS, and Linux relay configuration.
+- `mediamtx.rpi.yml`: Raspberry Pi configuration with `/cam` using `rpiCamera`.
+- `compose.mediamtx.desktop.yml`: cross-platform desktop Docker Compose entrypoint.
+- `compose.mediamtx.rpi.yml`: Raspberry Pi Docker Compose entrypoint with camera permissions.
 
 ### Smartphone Stream Configuration
 
-Configure your smartphone camera app to publish to: `rtsp://127.0.0.1:8554/drone_live`
+Configure your smartphone camera app to publish to: `rtsp://<relay-host-lan-ip>:8554/drone_live`
+
+For example, if the relay runs on a laptop at `192.168.200.101`, publish to:
+
+```text
+rtsp://192.168.200.101:8554/drone_live
+```
 
 The application will read from: `rtsp://127.0.0.1:8554/drone_live`
 

@@ -1,6 +1,6 @@
 logLevel: info
 
-# Keep the relay RTSP-only for the local monitoring MVP.
+# Raspberry Pi relay configuration with optional Pi camera source.
 rtsp: yes
 rtspAddress: :8554
 rtspTransports: [tcp]
