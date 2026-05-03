@@ -48,9 +48,9 @@ Aquaculture_CV_Project/
 - Camera (Rasperry Pi 5 IMX219 79.3 degree)
 - Drone Basis (F450)
 
-## 5. Local Stream Relay Setup (Low-Latency Ripple Monitoring)
+## 5. Local Stream Relay Setup (YOLOv26 Pose Estimation)
 
-The ripple monitoring feature requires a local RTSP relay (MediaMTX) to accept a smartphone camera stream and expose it to the application.
+The pose estimation feature requires a local RTSP relay (MediaMTX) to accept a camera stream and expose it to the application.
 
 ### MediaMTX Setup Without Docker
 
@@ -106,6 +106,16 @@ rtsp://192.168.200.101:8554/drone_live
 ```
 
 The application will read from: `rtsp://127.0.0.1:8554/drone_live`
+
+### YOLOv26 Pose Estimation Setup
+
+1. Place the YOLOv26 pose model at `models/yolo-v26-pose.pt`, or set `POSE_YOLO_MODEL_PATH` to another local weights file.
+2. Start the Streamlit app:
+   ```bash
+   streamlit run web/app.py
+   ```
+
+Optional thresholds can be tuned with `POSE_CONFIDENCE_THRESHOLD` and `POSE_KEYPOINT_CONFIDENCE_THRESHOLD`.
 
 **⚠️ Local Trusted Network Only**
 

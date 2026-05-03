@@ -1,4 +1,4 @@
-"""Shared dataclasses and enums for ripple monitoring."""
+"""Shared dataclasses and enums for local CV monitoring."""
 
 from dataclasses import dataclass, field
 from enum import Enum
@@ -65,4 +65,4 @@ class MonitoringSession:
     health_state: StreamHealthState = StreamHealthState.WAITING
     view_mode: str = "processed"
     latest_frame: Optional[CurrentFrame] = None
-    latest_detection: Optional[RippleDetectionResult] = None
+    latest_detection: Optional[object] = None
