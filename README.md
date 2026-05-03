@@ -26,7 +26,13 @@ Aquaculture_CV_Project/
 │   ├── clip_manifest.py
 │   └── run_clip_validation.py
 └── web/
-    └── app.py
+    ├── app.py                  # FastAPI backend
+    ├── detection_worker.py     # Shared detection loop
+    ├── overlay_hub.py          # WebSocket broadcast hub
+    ├── schemas.py              # Pydantic API/WS schemas
+    └── frontend/               # React/Vite UI
+        ├── src/
+        └── dist/               # Built for production serving
 ```
 
 ## 3. Development Principles
@@ -48,7 +54,24 @@ Aquaculture_CV_Project/
 - Camera (Rasperry Pi 5 IMX219 79.3 degree)
 - Drone Basis (F450)
 
-## 5. Local Stream Relay Setup (Low-Latency Ripple Monitoring)
+## 5. Running the Monitoring UI
+
+```bash
+# 1. Start MediaMTX
+docker compose -f compose.mediamtx.desktop.yml up
+
+# 2. Build the React frontend (first time only)
+cd web/frontend && npm install && npm run build && cd ../..
+
+# 3. Start the FastAPI backend
+uvicorn web.app:app --host 0.0.0.0 --port 8000
+
+# 4. Open http://localhost:8000 in Chrome or Edge and click Start
+```
+
+**Local trusted-network only.** Do not expose the FastAPI backend, MediaMTX WebRTC endpoint, or overlay WebSockets to public networks.
+
+## 6. Local Stream Relay Setup (MediaMTX)
 
 The ripple monitoring feature requires a local RTSP relay (MediaMTX) to accept a smartphone camera stream and expose it to the application.
 
@@ -59,7 +82,7 @@ The ripple monitoring feature requires a local RTSP relay (MediaMTX) to accept a
    ```bash
    ./mediamtx mediamtx.desktop.yml
    ```
-3. The relay will expose the smartphone publishing path at `rtsp://<relay-host>:8554/drone_live`.
+3. The relay will expose the smartphone publishing path at `rtsp://<relay-host>:8554/drone_live` and the browser WebRTC endpoint at `http://<relay-host>:8889/drone_live/whep`.
 
 ### MediaMTX Docker Setup: Windows, macOS, and Linux
 
@@ -69,7 +92,7 @@ Use the official generic MediaMTX image for desktop operating systems:
 docker compose -f compose.mediamtx.desktop.yml up
 ```
 
-This uses `mediamtx.desktop.yml`, which accepts external publishers at `/drone_live` and does not include Raspberry Pi camera-only settings.
+This uses `mediamtx.desktop.yml`, which accepts external publishers at `/drone_live`, exposes WebRTC/WHEP on `8889/tcp`, exposes ICE on `8189/udp`, and does not include Raspberry Pi camera-only settings.
 
 ### MediaMTX Docker Setup: Raspberry Pi Camera
 
@@ -109,7 +132,7 @@ The application will read from: `rtsp://127.0.0.1:8554/drone_live`
 
 **⚠️ Local Trusted Network Only**
 
-This is a local trusted-network setup. Do not expose the Streamlit interface or relay beyond your local network. There is no login, authentication, or role-based access control. This MVP is designed for operator use on a single workstation within a protected local environment.
+This is a local trusted-network setup. Do not expose the FastAPI backend, MediaMTX relay, or overlay WebSockets beyond your local network. There is no login, authentication, or role-based access control. This MVP is designed for operator use on a single workstation within a protected local environment.
 
 ### Non-Goals (Not Implemented)
 

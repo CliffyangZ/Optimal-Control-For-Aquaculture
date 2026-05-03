@@ -15,3 +15,22 @@ ACTIVITY_THRESHOLDS = {
 
 VALIDATION_MANIFEST_PATH = "validation/clips.local.yml"
 LOCAL_TRUSTED_NETWORK_ONLY = True
+
+# Stream / WebRTC
+SOURCE_ID = "drone_live"
+MEDIAMTX_HOST = "127.0.0.1"
+MEDIAMTX_WEBRTC_PORT = 8889
+WEBRTC_PATH_TEMPLATE = "/{source_id}/whep"
+
+# Overlay / WebSocket
+STALE_OVERLAY_MS = 500
+OVERLAY_HUB_QUEUE_MAXSIZE = 1
+
+# Viewer / session lifecycle
+VIEWER_HEARTBEAT_TIMEOUT_SECONDS = 30
+IDLE_SHUTDOWN_DELAY_SECONDS = 10
+
+# Backend defaults
+BACKEND_HOST = "0.0.0.0"
+BACKEND_PORT = 8000
+FRONTEND_DIST_DIR = "web/frontend/dist"

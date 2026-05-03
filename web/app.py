@@ -1,297 +1,218 @@
-"""Low-latency ripple monitoring Streamlit interface."""
+"""FastAPI backend for the low-latency aquaculture monitoring UI."""
 
-import streamlit as st
-import cv2
-import numpy as np
-from datetime import datetime
-import time
-from uuid import uuid4
+from __future__ import annotations
 
-from streaming.latest_frame_reader import LatestFrameReader
-from core.ripple_detector import RippleDetector
-from core.models import StreamHealthState, MonitoringSession
-from core.stream_health import StreamHealthMonitor
+import asyncio
+import json
+import logging
+import os
+from typing import Optional
+
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
 from config.setting import (
+    BACKEND_PORT,
+    FRONTEND_DIST_DIR,
     LOCAL_TRUSTED_NETWORK_ONLY,
-    STREAM_URL,
-    TARGET_DETECTION_FPS,
-    TARGET_DISPLAY_FPS,
+    MEDIAMTX_HOST,
+    MEDIAMTX_WEBRTC_PORT,
+    SOURCE_ID,
+    STALE_OVERLAY_MS,
+    WEBRTC_PATH_TEMPLATE,
+)
+from core.models import StreamStatus, DetectionHealthStatus
+from web.detection_worker import detection_worker
+from web.overlay_hub import overlay_hub
+from web.schemas import (
+    RuntimeConfigResponse,
+    SessionStatusResponse,
+    StopSessionRequest,
+)
+
+logger = logging.getLogger(__name__)
+
+LOOPBACK_MEDIAMTX_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+app = FastAPI(title="Aquaculture Monitoring API", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
-MONITORING_STATES = {
-    StreamHealthState.ACTIVE,
-    StreamHealthState.INTERRUPTED,
-    StreamHealthState.DETECTION_UNAVAILABLE,
-}
+def _browser_host(request: Request) -> str:
+    return request.url.hostname or "localhost"
 
 
-def initialize_session_state():
-    """Initialize or retrieve session state."""
-    if "session" not in st.session_state:
-        st.session_state.session = MonitoringSession(
-            session_id=str(uuid4()),
-            started_at=datetime.now()
+def _browser_visible_mediamtx_host(request: Request) -> str:
+    if MEDIAMTX_HOST in LOOPBACK_MEDIAMTX_HOSTS:
+        return _browser_host(request)
+    return MEDIAMTX_HOST
+
+
+def _build_config(request: Request) -> RuntimeConfigResponse:
+    host = _browser_host(request)
+    mediamtx_host = _browser_visible_mediamtx_host(request)
+    webrtc_url = (
+        f"http://{mediamtx_host}:{MEDIAMTX_WEBRTC_PORT}"
+        f"{WEBRTC_PATH_TEMPLATE.format(source_id=SOURCE_ID)}"
+    )
+    ws_scheme = "wss" if request.url.scheme == "https" else "ws"
+    overlay_ws_url = f"{ws_scheme}://{host}:{BACKEND_PORT}/ws/overlays"
+    return RuntimeConfigResponse(
+        source_id=SOURCE_ID,
+        webrtc_url=webrtc_url,
+        overlay_ws_url=overlay_ws_url,
+        stale_overlay_ms=STALE_OVERLAY_MS,
+        local_trusted_network_only=LOCAL_TRUSTED_NETWORK_ONLY,
+    )
+
+
+def _session_to_response(message: Optional[str] = None) -> SessionStatusResponse:
+    session = detection_worker.get_session_snapshot()
+    if session is None:
+        return SessionStatusResponse(
+            source_id=SOURCE_ID,
+            stream_status=StreamStatus.WAITING,
+            detection_status=DetectionHealthStatus.UNAVAILABLE,
+            active_viewer_count=0,
+            message=message,
         )
-    if "frame_reader" not in st.session_state:
-        st.session_state.frame_reader = None
-    if "detector" not in st.session_state:
-        st.session_state.detector = RippleDetector()
-    if "health_monitor" not in st.session_state:
-        st.session_state.health_monitor = StreamHealthMonitor()
-    if "last_detection_time" not in st.session_state:
-        st.session_state.last_detection_time = None
-    if "last_detected_sequence" not in st.session_state:
-        st.session_state.last_detected_sequence = None
-    if "last_detection_attempt_time" not in st.session_state:
-        st.session_state.last_detection_attempt_time = 0.0
-    if "last_displayed_sequence" not in st.session_state:
-        st.session_state.last_displayed_sequence = None
+    return SessionStatusResponse(
+        source_id=session.source_id,
+        stream_status=session.stream_status,
+        detection_status=session.detection_status,
+        active_viewer_count=session.active_viewer_count,
+        started_at=session.started_at.isoformat() if session.started_at else None,
+        last_frame_at=session.last_frame_at.isoformat() if session.last_frame_at else None,
+        last_overlay_at=session.last_overlay_at.isoformat() if session.last_overlay_at else None,
+        detection_fps=session.detection_fps,
+        message=message,
+    )
 
 
-def format_time_delta(start: datetime, end: datetime = None) -> str:
-    """Format time difference in readable format."""
-    if end is None:
-        end = datetime.now()
-    delta = end - start
-    seconds = delta.total_seconds()
+# --- REST endpoints ---
 
-    if seconds < 1:
-        return "< 1 sec"
-    elif seconds < 60:
-        return f"{int(seconds)} sec"
-    else:
-        minutes = int(seconds // 60)
-        secs = int(seconds % 60)
-        return f"{minutes}m {secs}s"
+@app.get("/config", response_model=RuntimeConfigResponse)
+async def get_config(request: Request) -> RuntimeConfigResponse:
+    return _build_config(request)
 
 
-def render_processed_frame(frame, detection_result):
-    """Render frame with detection visualization."""
-    if frame is None:
-        return None
+@app.post("/session/start", response_model=SessionStatusResponse)
+async def start_session() -> SessionStatusResponse:
+    from uuid import uuid4
+    viewer_id = str(uuid4())
+    await detection_worker.register_viewer(viewer_id)
+    return _session_to_response(message=f"viewer_id:{viewer_id}")
 
-    display_frame = frame.copy()
 
-    if detection_result and hasattr(detection_result, 'visual_marker'):
-        marker = detection_result.visual_marker
-        if marker and "mark_regions" in marker:
-            for region in marker["mark_regions"]:
-                x, y, w, h = region["x"], region["y"], region["width"], region["height"]
-                cv2.rectangle(
-                    display_frame,
-                    (x, y),
-                    (x + w, y + h),
-                    marker.get("color", (0, 255, 0)),
-                    2
+@app.post("/session/stop", response_model=SessionStatusResponse)
+async def stop_session(body: Optional[StopSessionRequest] = None) -> SessionStatusResponse:
+    viewer_id = body.viewer_id if body else None
+    if viewer_id:
+        await detection_worker.unregister_viewer(viewer_id)
+    return _session_to_response()
+
+
+@app.get("/status", response_model=SessionStatusResponse)
+async def get_status() -> SessionStatusResponse:
+    return _session_to_response()
+
+
+# --- WebSocket endpoint ---
+
+@app.websocket("/ws/overlays")
+async def ws_overlays(websocket: WebSocket) -> None:
+    await websocket.accept()
+    viewer_id: Optional[str] = None
+    push_task: Optional[asyncio.Task] = None
+
+    try:
+        while True:
+            try:
+                raw = await websocket.receive_text()
+                data = json.loads(raw)
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+
+            msg_type = data.get("type", "")
+
+            if msg_type == "viewer.hello":
+                viewer_id = data.get("viewer_id", "")
+                overlay_enabled = data.get("overlay_enabled", True)
+                await detection_worker.register_viewer(viewer_id, overlay_enabled)
+                queue = overlay_hub.subscribe(viewer_id)
+                push_task = asyncio.create_task(
+                    _push_overlays(websocket, queue, viewer_id)
                 )
 
-        label_text = marker.get("label", "")
-        cv2.putText(
-            display_frame,
-            label_text,
-            (10, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.0,
-            marker.get("color", (0, 255, 0)),
-            2
-        )
+            elif msg_type == "viewer.heartbeat":
+                vid = data.get("viewer_id", viewer_id)
+                if vid:
+                    await detection_worker.update_heartbeat(vid)
 
-    return display_frame
+            elif msg_type == "viewer.stop":
+                vid = data.get("viewer_id", viewer_id)
+                if vid:
+                    await detection_worker.unregister_viewer(vid)
+                    overlay_hub.unsubscribe(vid)
+                break
 
-
-def main():
-    """Main Streamlit application."""
-    st.set_page_config(
-        page_title="Low-Latency Ripple Monitoring",
-        layout="wide",
-        initial_sidebar_state="collapsed"
-    )
-
-    st.title("🌊 Low-Latency Ripple Monitoring")
-
-    if LOCAL_TRUSTED_NETWORK_ONLY:
-        st.warning(
-            "⚠️ This interface is designed for local, trusted networks only. "
-            "Do not expose this application to public networks."
-        )
-
-    initialize_session_state()
-
-    session = st.session_state.session
-    detector = st.session_state.detector
-    health_monitor = st.session_state.health_monitor
-
-    col1, col2 = st.columns([3, 1])
-
-    with col1:
-        col_left, col_right = st.columns(2)
-        with col_left:
-            if st.button("▶️ Start", key="start_btn", use_container_width=True):
-                if st.session_state.frame_reader is None:
-                    st.session_state.frame_reader = LatestFrameReader(STREAM_URL)
-                    st.session_state.frame_reader.start()
-                session.started_at = datetime.now()
-                session.stopped_at = None
-                session.health_state = StreamHealthState.ACTIVE
-                st.session_state.last_detection_time = None
-                st.session_state.last_detected_sequence = None
-                st.session_state.last_detection_attempt_time = 0.0
-                st.session_state.last_displayed_sequence = None
-                st.rerun()
-
-        with col_right:
-            if st.button("⏹️ Stop", key="stop_btn", use_container_width=True):
-                if st.session_state.frame_reader:
-                    st.session_state.frame_reader.stop()
-                    st.session_state.frame_reader = None
-                session.health_state = StreamHealthState.WAITING
-                session.latest_frame = None
-                session.latest_detection = None
-                session.stopped_at = datetime.now()
-                st.session_state.last_detection_time = None
-                st.session_state.last_detected_sequence = None
-                st.session_state.last_detection_attempt_time = 0.0
-                st.session_state.last_displayed_sequence = None
-                st.rerun()
-
-    view_mode = st.radio(
-        "View Mode",
-        ["Processed", "Raw"],
-        horizontal=True,
-        key="view_mode"
-    )
-    session.view_mode = "processed" if view_mode == "Processed" else "raw"
-
-    video_placeholder = st.empty()
-    status_placeholder = st.empty()
-    metrics_placeholder = st.empty()
-    detection_message_placeholder = st.empty()
-
-    frame_reader = st.session_state.frame_reader
-
-    if session.health_state == StreamHealthState.WAITING:
-        st.info("Click **Start** to begin monitoring the stream.")
-
-    elif session.health_state in MONITORING_STATES:
-        if frame_reader is None:
-            st.error("Frame reader not initialized. Click Start again.")
-
-        else:
-            display_interval_seconds = 1 / TARGET_DISPLAY_FPS if TARGET_DISPLAY_FPS > 0 else 0
-            detection_interval_seconds = (
-                1 / TARGET_DETECTION_FPS if TARGET_DETECTION_FPS > 0 else 0
-            )
-
-            while session.health_state in MONITORING_STATES:
-                latest_frame = frame_reader.get_latest_frame()
-                last_frame_time = frame_reader.get_last_frame_time()
-
-                if latest_frame:
-                    session.latest_frame = latest_frame
-
-                    current_time = datetime.now()
-                    time_since_frame = (
-                        (current_time - last_frame_time).total_seconds()
-                        if last_frame_time
-                        else float('inf')
-                    )
-
-                    if time_since_frame > 3:
-                        session.health_state = StreamHealthState.INTERRUPTED
-                    else:
-                        session.health_state = StreamHealthState.ACTIVE
-                else:
-                    if (datetime.now() - session.started_at).total_seconds() > 3:
-                        session.health_state = StreamHealthState.INTERRUPTED
-
-                detection_result = session.latest_detection
-                now_monotonic = time.monotonic()
-                if (
-                    latest_frame
-                    and latest_frame.sequence_number != st.session_state.last_detected_sequence
-                    and (
-                        now_monotonic - st.session_state.last_detection_attempt_time
-                        >= detection_interval_seconds
-                    )
-                ):
-                    st.session_state.last_detection_attempt_time = now_monotonic
-                    detection_result = detector.detect(latest_frame)
-                    session.latest_detection = detection_result
-                    st.session_state.last_detection_time = datetime.now()
-                    st.session_state.last_detected_sequence = latest_frame.sequence_number
-
-                    if detection_result.status.value == "unavailable":
-                        session.health_state = StreamHealthState.DETECTION_UNAVAILABLE
-                    elif session.health_state == StreamHealthState.DETECTION_UNAVAILABLE:
-                        session.health_state = StreamHealthState.ACTIVE
-
-                with status_placeholder.container():
-                    st.subheader(f"Status: {session.health_state.value}")
-
-                if (
-                    latest_frame
-                    and latest_frame.sequence_number != st.session_state.last_displayed_sequence
-                ):
-                    display_frame = latest_frame.image
-                    if session.view_mode == "processed" and detection_result:
-                        if detection_result.status.value == "available":
-                            display_frame = render_processed_frame(
-                                display_frame,
-                                detection_result
-                            )
-
-                    display_frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-                    video_placeholder.image(display_frame_rgb, width="stretch")
-                    st.session_state.last_displayed_sequence = latest_frame.sequence_number
-
-                    with metrics_placeholder.container():
-                        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-
-                        with metric_col1:
-                            frame_age = format_time_delta(latest_frame.captured_at)
-                            st.metric("Frame Age", frame_age)
-
-                        with metric_col2:
-                            if detection_result and st.session_state.last_detection_time:
-                                detection_age = format_time_delta(
-                                    st.session_state.last_detection_time
-                                )
-                            else:
-                                detection_age = "—"
-                            st.metric("Detection Age", detection_age)
-
-                        with metric_col3:
-                            if detection_result and detection_result.status.value == "available":
-                                st.metric(
-                                    "Activity Score",
-                                    f"{detection_result.activity_score}/100"
-                                )
-                            else:
-                                st.metric("Activity Score", "—")
-
-                        with metric_col4:
-                            if detection_result and detection_result.status.value == "available":
-                                level = detection_result.activity_level.value
-                                st.metric("Activity Level", level)
-                            else:
-                                st.metric("Activity Level", "—")
-
-                    if detection_result and detection_result.status.value == "unavailable":
-                        detection_message_placeholder.warning(
-                            f"Detection Unavailable: {detection_result.reason}"
-                        )
-                    else:
-                        detection_message_placeholder.empty()
-
-                time.sleep(display_interval_seconds)
-
-    st.divider()
-    st.caption(
-        "Low-latency ripple monitoring for aquaculture. "
-        "For documentation and setup instructions, see specs/001-rtsp-ripple-monitoring/quickstart.md"
-    )
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.debug("ws_overlays: connection error viewer=%s", viewer_id)
+    finally:
+        if push_task and not push_task.done():
+            push_task.cancel()
+        if viewer_id:
+            await detection_worker.unregister_viewer(viewer_id)
+            overlay_hub.unsubscribe(viewer_id)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
-if __name__ == "__main__":
-    main()
+async def _push_overlays(websocket: WebSocket, queue, viewer_id: str) -> None:
+    try:
+        while True:
+            payload = await queue.get()
+            if payload is None:
+                break
+            try:
+                await websocket.send_text(json.dumps(payload))
+            except Exception:
+                break
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.debug("_push_overlays: stopped for viewer=%s", viewer_id)
+
+
+# --- Static frontend serving ---
+
+_dist = FRONTEND_DIST_DIR
+if os.path.isdir(_dist):
+    _assets_dir = os.path.join(_dist, "assets")
+    if os.path.isdir(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_index() -> FileResponse:
+        return FileResponse(os.path.join(_dist, "index.html"))
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str) -> FileResponse:
+        candidate = os.path.join(_dist, full_path)
+        if os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_dist, "index.html"))

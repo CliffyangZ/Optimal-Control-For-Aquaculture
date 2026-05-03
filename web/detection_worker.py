@@ -1,0 +1,287 @@
+"""Shared detection worker lifecycle for one configured stream."""
+
+import asyncio
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Optional
+from uuid import uuid4
+
+from config.setting import (
+    SOURCE_ID,
+    STREAM_URL,
+    TARGET_DETECTION_FPS,
+    VIEWER_HEARTBEAT_TIMEOUT_SECONDS,
+    IDLE_SHUTDOWN_DELAY_SECONDS,
+    STALE_OVERLAY_MS,
+)
+from core.models import (
+    DetectionHealthStatus,
+    DetectionStatus,
+    LiveStreamSession,
+    StreamStatus,
+    VideoFrame,
+    ViewerSession,
+    ViewerState,
+    ActivityBadge,
+    ActivityRegion,
+    DetectionOverlayPayload,
+)
+from core.stream_health import derive_detection_status, derive_stream_status
+from streaming.latest_frame_reader import LatestFrameReader
+from core.ripple_detector import RippleDetector
+from web.overlay_hub import overlay_hub
+from web.schemas import OverlayMessage, RegionPayload, ActivityPayload, StatusMessage
+
+logger = logging.getLogger(__name__)
+
+
+class DetectionWorker:
+    """Single shared detection loop for the configured stream.
+
+    Lifecycle:
+    - Starts when the first viewer joins via register_viewer().
+    - Runs detection at TARGET_DETECTION_FPS and broadcasts overlays via overlay_hub.
+    - Stops within IDLE_SHUTDOWN_DELAY_SECONDS after active_viewer_count reaches 0.
+    """
+
+    def __init__(self) -> None:
+        self._session: Optional[LiveStreamSession] = None
+        self._viewers: dict[str, ViewerSession] = {}
+        self._lock = asyncio.Lock()
+        self._worker_task: Optional[asyncio.Task] = None
+        self._frame_reader: Optional[LatestFrameReader] = None
+        self._detector = RippleDetector()
+        self._frame_counter = 0
+        self._detection_times: list[float] = []
+
+    # --- Public API ---
+
+    @property
+    def session(self) -> Optional[LiveStreamSession]:
+        return self._session
+
+    async def register_viewer(self, viewer_id: str, overlay_enabled: bool = True) -> LiveStreamSession:
+        async with self._lock:
+            now = datetime.now(timezone.utc)
+            viewer = ViewerSession(
+                viewer_id=viewer_id,
+                connected_at=now,
+                last_heartbeat_at=now,
+                state=ViewerState.ACTIVE,
+                overlay_enabled=overlay_enabled,
+            )
+            self._viewers[viewer_id] = viewer
+
+            if self._session is None:
+                self._session = LiveStreamSession(
+                    session_id=str(uuid4()),
+                    source_id=SOURCE_ID,
+                    started_at=now,
+                    stream_status=StreamStatus.CONNECTING,
+                    detection_status=DetectionHealthStatus.UNAVAILABLE,
+                )
+                self._start_worker()
+            self._session.active_viewer_count = len(self._active_viewers())
+            return self._session
+
+    async def unregister_viewer(self, viewer_id: str) -> Optional[LiveStreamSession]:
+        async with self._lock:
+            viewer = self._viewers.pop(viewer_id, None)
+            if viewer:
+                viewer.state = ViewerState.STOPPED
+            if self._session:
+                self._session.active_viewer_count = len(self._active_viewers())
+            return self._session
+
+    async def update_heartbeat(self, viewer_id: str) -> None:
+        async with self._lock:
+            viewer = self._viewers.get(viewer_id)
+            if viewer:
+                viewer.last_heartbeat_at = datetime.now(timezone.utc)
+
+    def get_session_snapshot(self) -> Optional[LiveStreamSession]:
+        return self._session
+
+    # --- Internal helpers ---
+
+    def _active_viewers(self) -> list[ViewerSession]:
+        return [v for v in self._viewers.values() if v.state in (ViewerState.ACTIVE, ViewerState.CONNECTING, ViewerState.RECONNECTING)]
+
+    def _start_worker(self) -> None:
+        if self._worker_task is None or self._worker_task.done():
+            self._frame_reader = LatestFrameReader(STREAM_URL)
+            self._frame_reader.start()
+            self._worker_task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        logger.info("detection_worker: started for source=%s", SOURCE_ID)
+        detection_interval = 1.0 / TARGET_DETECTION_FPS if TARGET_DETECTION_FPS > 0 else 0.1
+        idle_since: Optional[float] = None
+
+        try:
+            while True:
+                loop_start = time.monotonic()
+
+                # Check if we should idle-shutdown
+                active = self._active_viewers()
+                if not active:
+                    if idle_since is None:
+                        idle_since = time.monotonic()
+                    elif time.monotonic() - idle_since >= IDLE_SHUTDOWN_DELAY_SECONDS:
+                        logger.info("detection_worker: no active viewers; shutting down")
+                        break
+                else:
+                    idle_since = None
+
+                # Heartbeat timeout cleanup
+                now = datetime.now(timezone.utc)
+                async with self._lock:
+                    for viewer_id, v in list(self._viewers.items()):
+                        age = (now - v.last_heartbeat_at).total_seconds()
+                        if age > VIEWER_HEARTBEAT_TIMEOUT_SECONDS:
+                            logger.info("detection_worker: heartbeat timeout viewer=%s", viewer_id)
+                            v.state = ViewerState.TIMED_OUT
+                            self._viewers.pop(viewer_id, None)
+                    if self._session:
+                        self._session.active_viewer_count = len(self._active_viewers())
+
+                # Get latest frame from reader
+                if self._frame_reader is None:
+                    await asyncio.sleep(detection_interval)
+                    continue
+
+                raw_frame = self._frame_reader.get_latest_frame()
+                last_frame_time = self._frame_reader.get_last_frame_time()
+
+                if self._session:
+                    if last_frame_time:
+                        self._session.last_frame_at = last_frame_time
+                    self._session.stream_status = derive_stream_status(
+                        last_frame_at=last_frame_time,
+                        started_at=self._session.started_at,
+                    )
+
+                if raw_frame is None:
+                    await self._broadcast_status()
+                    elapsed = time.monotonic() - loop_start
+                    await asyncio.sleep(max(0, detection_interval - elapsed))
+                    continue
+
+                self._frame_counter += 1
+                video_frame = VideoFrame(
+                    frame_id=raw_frame.sequence_number,
+                    captured_at=raw_frame.captured_at,
+                    source_width=raw_frame.source_width,
+                    source_height=raw_frame.source_height,
+                    image=raw_frame.image,
+                )
+
+                # Run detection (synchronous; offload to thread executor to avoid blocking event loop)
+                loop = asyncio.get_event_loop()
+                t0 = time.monotonic()
+                result = await loop.run_in_executor(None, self._detector.detect, raw_frame)
+                detection_time = time.monotonic() - t0
+                self._detection_times.append(detection_time)
+                if len(self._detection_times) > 30:
+                    self._detection_times.pop(0)
+
+                now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+                if self._session:
+                    self._session.last_overlay_at = datetime.now(timezone.utc)
+                    avg_dt = sum(self._detection_times) / len(self._detection_times) if self._detection_times else 0
+                    self._session.detection_fps = round(1.0 / avg_dt, 1) if avg_dt > 0 else 0.0
+                    self._session.detection_status = derive_detection_status(
+                        last_overlay_at=self._session.last_overlay_at,
+                        last_frame_at=last_frame_time,
+                    )
+
+                await self._broadcast_overlay(video_frame, result, now_ms)
+
+                elapsed = time.monotonic() - loop_start
+                await asyncio.sleep(max(0, detection_interval - elapsed))
+
+        except asyncio.CancelledError:
+            logger.info("detection_worker: cancelled")
+        except Exception:
+            logger.exception("detection_worker: unhandled error")
+        finally:
+            await self._shutdown()
+
+    async def _broadcast_overlay(self, frame: VideoFrame, result, now_ms: int) -> None:
+        if self._session is None:
+            return
+
+        regions: list[RegionPayload] = []
+        activity: Optional[ActivityPayload] = None
+
+        if result.status == DetectionStatus.AVAILABLE and result.visual_marker:
+            marker = result.visual_marker
+            sw, sh = frame.source_width, frame.source_height
+            for i, r in enumerate(marker.get("mark_regions", [])):
+                x = max(0.0, min(1.0, r["x"] / sw))
+                y = max(0.0, min(1.0, r["y"] / sh))
+                w = max(0.0, min(1.0 - x, r["width"] / sw))
+                h = max(0.0, min(1.0 - y, r["height"] / sh))
+                regions.append(RegionPayload(id=f"region-{i+1}", x=x, y=y, width=w, height=h))
+            if result.activity_level and result.activity_score is not None and result.confidence is not None:
+                activity = ActivityPayload(
+                    level=result.activity_level.value,
+                    score=result.activity_score,
+                    confidence=result.confidence,
+                )
+
+        det_status = self._session.detection_status
+        if result.status == DetectionStatus.UNAVAILABLE:
+            det_status = DetectionHealthStatus.UNAVAILABLE
+
+        msg = OverlayMessage(
+            schema="overlay.v1",
+            source_id=self._session.source_id,
+            frame_id=frame.frame_id,
+            timestamp_ms=now_ms,
+            source_width=frame.source_width,
+            source_height=frame.source_height,
+            stream_status=self._session.stream_status,
+            detection_status=det_status,
+            activity=activity,
+            regions=regions,
+            message=result.reason if result.status == DetectionStatus.UNAVAILABLE else None,
+        )
+        overlay_hub.broadcast(msg.to_ws_dict())
+
+    async def _broadcast_status(self) -> None:
+        if self._session is None:
+            return
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        msg = StatusMessage(
+            schema="status.v1",
+            source_id=self._session.source_id,
+            timestamp_ms=now_ms,
+            stream_status=self._session.stream_status,
+            detection_status=self._session.detection_status,
+            active_viewer_count=self._session.active_viewer_count,
+        )
+        overlay_hub.broadcast(msg.to_ws_dict())
+
+    async def _shutdown(self) -> None:
+        if self._frame_reader:
+            try:
+                self._frame_reader.stop()
+            except Exception:
+                pass
+            self._frame_reader = None
+        overlay_hub.close_all()
+        async with self._lock:
+            if self._session:
+                self._session.stopped_at = datetime.now(timezone.utc)
+                self._session.stream_status = StreamStatus.WAITING
+                self._session.detection_status = DetectionHealthStatus.UNAVAILABLE
+                self._session.active_viewer_count = 0
+            self._session = None
+            self._viewers.clear()
+        logger.info("detection_worker: shutdown complete")
+
+
+detection_worker = DetectionWorker()
