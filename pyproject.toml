@@ -20,6 +20,11 @@ test = [
     "pytest>=7.4.0",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["config*", "core*", "streaming*", "validation*", "web*"]
