@@ -8,6 +8,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // host: '0.0.0.0', 讓其他裝置訪問本地開發伺服器
     proxy: {
       '/config': 'http://localhost:8000',
       '/session': 'http://localhost:8000',
