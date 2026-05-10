@@ -1,5 +1,11 @@
-"""MVP configuration constants for low-latency ripple monitoring."""
+"""Configuration constants for spatiotemporal water ripple analysis monitoring.
 
+Includes stream source settings, spatial grid dimensions, feature fusion weights,
+optical flow and edge detection parameters, activity level thresholds, and UI settings.
+All weights must sum to 1.0 and threshold values must be in valid ranges [0, 1].
+"""
+
+# Stream Source
 STREAM_URL = "rtsp://127.0.0.1:8554/drone_live"
 TARGET_WIDTH = 1280
 TARGET_HEIGHT = 720
@@ -7,6 +13,48 @@ TARGET_DISPLAY_FPS = 30
 TARGET_DETECTION_FPS = 10
 INTERRUPTION_TIMEOUT_SECONDS = 3
 
+# Spatial Grid
+GRID_ROWS = 8
+GRID_COLS = 8
+
+# Feature Weights (must sum to 1.0)
+WEIGHT_SPATIAL = 0.25
+WEIGHT_EXPANSION = 0.35
+WEIGHT_MOTION = 0.25
+WEIGHT_EDGE_CHANGE = 0.15
+
+# Sliding Window
+WINDOW_FRAMES = 30
+
+# Optical Flow (Farneback parameters)
+FLOW_PYR_SCALE = 0.5
+FLOW_LEVELS = 3
+FLOW_WINSIZE = 21
+FLOW_ITERATIONS = 3
+FLOW_POLY_N = 5
+FLOW_POLY_SIGMA = 1.2
+
+# Edge Detection (Canny)
+CANNY_LOW = 50
+CANNY_HIGH = 150
+BLUR_KERNEL = (5, 5)
+
+# Activity Level Thresholds
+ACTIVITY_LOW_THRESHOLD = 0.2
+ACTIVITY_HIGH_THRESHOLD = 0.5
+
+# Temporal Feature Thresholds
+MOTION_THRESHOLD = 12
+FLOW_MAG_THRESHOLD = 0.2
+FLOW_SAMPLE_STEP = 4
+RIPPLE_R_MIN = 10
+RIPPLE_R_MAX = 120
+
+# UI Settings
+HEATMAP_COLORMAP = "HOT"
+HEATMAP_ALPHA = 0.5
+
+# Legacy thresholds (for backward compatibility)
 ACTIVITY_THRESHOLDS = {
     "low": [0, 33],
     "medium": [34, 66],

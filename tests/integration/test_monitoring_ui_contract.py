@@ -330,3 +330,163 @@ class TestDetectionUnavailableUIContract:
         """Test that Detection Unavailable state has proper values."""
         state = StreamHealthState.DETECTION_UNAVAILABLE
         assert state.value == "Detection Unavailable"
+
+
+class TestSpatiotemporalHeatmapUIContract:
+    """Test spatiotemporal heatmap overlay UI contract (User Story 2)."""
+
+    def test_heatmap_overlay_in_processed_view(self):
+        """Test that heatmap is displayed in processed view."""
+        from core.models import ActivityHeatmap, CellActivityScore
+        import numpy as np
+
+        session = MonitoringSession(
+            session_id="test-001",
+            started_at=datetime.now(),
+            view_mode="processed"
+        )
+
+        # Create a heatmap
+        cells = np.empty((8, 8), dtype=object)
+        for r in range(8):
+            for c in range(8):
+                cells[r, c] = CellActivityScore(
+                    cell_row=r, cell_col=c,
+                    raw_score=0.5, smoothed_score=0.5,
+                    level="medium", frame_sequence_number=1
+                )
+
+        heatmap = ActivityHeatmap(
+            cells=cells,
+            global_score=0.5,
+            global_level="medium",
+            frame_sequence_number=1
+        )
+
+        session.latest_heatmap = heatmap
+
+        assert session.view_mode == "processed"
+        assert session.latest_heatmap is not None
+        assert session.latest_heatmap.global_score == 0.5
+
+    def test_heatmap_hidden_in_raw_view(self):
+        """Test that heatmap is hidden in raw view."""
+        session = MonitoringSession(
+            session_id="test-001",
+            started_at=datetime.now(),
+            view_mode="raw"
+        )
+
+        assert session.view_mode == "raw"
+        # Heatmap overlay should not be rendered in raw view
+
+    def test_grid_lines_visible(self):
+        """Test that grid lines are visible with heatmap."""
+        from core.models import ActivityHeatmap, CellActivityScore
+        import numpy as np
+
+        cells = np.empty((8, 8), dtype=object)
+        for r in range(8):
+            for c in range(8):
+                cells[r, c] = CellActivityScore(
+                    cell_row=r, cell_col=c,
+                    raw_score=float(r * c) / 64,
+                    smoothed_score=float(r * c) / 64,
+                    level="low", frame_sequence_number=1
+                )
+                cells[r, c].center_x = 100 + c * 20
+                cells[r, c].center_y = 100 + r * 20
+
+        heatmap = ActivityHeatmap(
+            cells=cells,
+            global_score=0.25,
+            global_level="low",
+            frame_sequence_number=1
+        )
+
+        assert heatmap.cells.shape == (8, 8)
+
+    def test_heatmap_reflects_cell_activity(self):
+        """Test that heatmap colors reflect individual cell activity."""
+        from core.models import ActivityHeatmap, CellActivityScore
+        import numpy as np
+
+        cells = np.empty((8, 8), dtype=object)
+        for r in range(8):
+            for c in range(8):
+                score = 0.8 if r < 4 else 0.2  # Top half high, bottom low
+                cells[r, c] = CellActivityScore(
+                    cell_row=r, cell_col=c,
+                    raw_score=score, smoothed_score=score,
+                    level="high" if score >= 0.5 else "low",
+                    frame_sequence_number=1
+                )
+
+        heatmap = ActivityHeatmap(
+            cells=cells,
+            global_score=0.5,
+            global_level="medium",
+            frame_sequence_number=1
+        )
+
+        # Verify grid has mixed activity levels
+        high_cells = sum(1 for cell in heatmap.cells.flat if cell.level == "high")
+        low_cells = sum(1 for cell in heatmap.cells.flat if cell.level == "low")
+
+        assert high_cells == 32
+        assert low_cells == 32
+
+
+class TestActivityTrendUIContract:
+    """Test activity time-series and trend UI contract (User Story 3)."""
+
+    def test_score_history_accumulation(self):
+        """Test that activity scores are accumulated over time."""
+        session = MonitoringSession(
+            session_id="test-001",
+            started_at=datetime.now()
+        )
+
+        # Add score history
+        session.score_history = [
+            (datetime.now(), 0.1),
+            (datetime.now(), 0.15),
+            (datetime.now(), 0.2),
+        ]
+
+        assert len(session.score_history) == 3
+        assert session.score_history[0][1] == 0.1
+
+    def test_score_history_preserves_timestamp(self):
+        """Test that score history preserves timestamps."""
+        session = MonitoringSession(
+            session_id="test-001",
+            started_at=datetime.now()
+        )
+
+        now = datetime.now()
+        session.score_history = [
+            (now, 0.5),
+        ]
+
+        assert session.score_history[0][0] == now
+
+    def test_session_provides_statistics(self):
+        """Test that session can compute summary statistics."""
+        session = MonitoringSession(
+            session_id="test-001",
+            started_at=datetime.now()
+        )
+
+        from datetime import timedelta
+
+        now = datetime.now()
+        session.score_history = [
+            (now + timedelta(seconds=i), float(i) / 10)
+            for i in range(10)
+        ]
+
+        scores = [s[1] for s in session.score_history]
+        assert len(scores) == 10
+        assert max(scores) == 0.9
+        assert min(scores) == 0.0

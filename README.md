@@ -12,30 +12,78 @@
 ```text
 Aquaculture_CV_Project/
 ├── config/
-│   └── setting.py
+│   └── setting.py                              # Extended with spatiotemporal parameters
 ├── core/
 │   ├── activity_levels.py
-│   ├── models.py
-│   ├── ripple_detector.py
+│   ├── models.py                               # Extended with spatiotemporal dataclasses
+│   ├── ripple_detector.py                      # Legacy simple detector
+│   ├── spatial_features.py                     # NEW: Canny edges, Sobel gradients
+│   ├── temporal_features.py                    # NEW: Optical flow, motion energy
+│   ├── spatiotemporal_pipeline.py              # NEW: Per-frame analysis pipeline
 │   └── stream_health.py
 ├── drivers/
 │   └── README.md
 ├── streaming/
 │   └── latest_frame_reader.py
+├── tests/
+│   ├── unit/
+│   │   ├── test_spatial_features.py            # NEW
+│   │   ├── test_temporal_features.py           # NEW
+│   │   └── test_activity_fusion.py             # NEW
+│   └── integration/
+│       ├── test_spatiotemporal_pipeline.py     # NEW
+│       └── test_monitoring_ui_contract.py      # Updated
 ├── validation/
 │   ├── clip_manifest.py
 │   └── run_clip_validation.py
 └── web/
-    ├── app.py                  # FastAPI backend
-    ├── detection_worker.py     # Shared detection loop
-    ├── overlay_hub.py          # WebSocket broadcast hub
-    ├── schemas.py              # Pydantic API/WS schemas
-    └── frontend/               # React/Vite UI
+    ├── app.py                                  # FastAPI backend
+    ├── streamlit_app.py                        # NEW: Streamlit UI for spatiotemporal analysis
+    ├── components.py                           # NEW: Heatmap and grid rendering
+    ├── detection_worker.py                     # Shared detection loop
+    ├── overlay_hub.py                          # WebSocket broadcast hub
+    ├── schemas.py                              # Pydantic API/WS schemas
+    └── frontend/                               # React/Vite UI
         ├── src/
-        └── dist/               # Built for production serving
+        └── dist/                               # Built for production serving
 ```
 
-## 3. Development Principles
+## 3. Spatiotemporal Water Ripple Analysis
+
+The system includes real-time spatiotemporal analysis for detecting aquatic activity from water-surface video streams.
+
+### Features
+
+- **Real-time Activity Scoring**: Continuous 0–1 activity score updated each frame
+- **Spatial Analysis**: Canny edge detection and Sobel gradient analysis over an 8×8 grid
+- **Temporal Analysis**: Farneback dense optical flow and frame differencing
+- **Activity Heatmap**: Per-cell activity visualization with configurable colormap overlay
+- **Time-Series Tracking**: Historical activity scores with trend analysis and CSV export
+- **Live Monitoring UI**: Streamlit interface with Start/Stop controls and raw/processed view toggle
+
+### Running the Streamlit UI
+
+```bash
+streamlit run web/streamlit_app.py
+```
+
+Configure the stream source in `config/setting.py`:
+- `STREAM_URL`: RTSP URL or local video file path
+- `GRID_ROWS`, `GRID_COLS`: Grid dimensions (default 8×8)
+- `WINDOW_FRAMES`: Temporal smoothing window size (default 30 frames)
+
+### Testing
+
+Run the test suite to validate feature extraction and pipeline integration:
+
+```bash
+pytest tests/unit/test_spatial_features.py -v
+pytest tests/unit/test_temporal_features.py -v
+pytest tests/unit/test_activity_fusion.py -v
+pytest tests/integration/test_spatiotemporal_pipeline.py -v
+```
+
+## 4. Development Principles
 
 - Use Spec-Driven Development: write the English specification before planning or coding.
 - Keep specifications, plans, tasks, code comments, and docstrings in English.
