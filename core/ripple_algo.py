@@ -1,37 +1,43 @@
-"""Spatiotemporal ripple detection — v2 (industrial).
+"""Spatiotemporal ripple detection — v3.
 
-Design overview (see doc/ripple_algorithm.md for the long form):
+Design overview:
 
+  0. Camera motion compensation (new):
+                    KLT sparse optical flow → RANSAC homography H.
+                    prev_gray and prev_edges are warped into the current
+                    coordinate frame before any inter-frame comparison.
+                    Whole-frame translation has div=0, so residual camera shake
+                    does not pollute the divergence field.
   1. Preprocess  : gray + blur + CLAHE
   2. Specular mask: HSV-based suppression of water highlights
   3. MOG2         : adaptive learning rate (freezes when global activity is high)
   4. Soft fg mask : 0.3 base + 0.7 * (fg/255), so background is *attenuated*,
                     not silenced, and persistent water texture isn't fully eaten
                     by the background model.
-  5. Optical flow : DIS PRESET_FAST on a flow_scale downsample, then resized back.
-                    Divergence (∂u/∂x + ∂v/∂y, positive part) is the second
-                    expansion cue alongside outward dot-product.
-  6. Candidate proposal:
-                    dynamic_mask = (motion_mask OR edge_xor) AND (soft_fg ≥ 0.5)
-                    connected components → top-N by area, each centroid is a
-                    candidate ripple centre.  This replaces the v1 assumption
-                    that the *cell centroid* is the ripple centre.
-  7. Per-candidate structure:
+  5. Optical flow : DIS PRESET_FAST on aligned frames.
+                    Divergence (∂u/∂x + ∂v/∂y, positive part) is smoothed and
+                    used as the primary candidate source.
+  6. Candidate proposal (new):
+                    div_smooth = GaussianBlur(div_pos, σ=div_peak_sigma)
+                    local maxima above threshold → candidate ripple centres.
+                    Replaces motion_mask | edge_xor → connected components.
+  7. Temporal tracking (new):
+                    Greedy nearest-neighbour matching across frames.
+                    Only candidates persistent ≥ tracker_min_age frames are
+                    passed to scoring — short-lived water-surface flashes drop out.
+  8. Per-candidate structure:
                     - spatial  : radius-bin peak / top-k of radial edge alignment
-                                 (small ripples no longer diluted by the full ring)
                     - radial_flow + divergence : "outward + diverging" both required
-                    - structure = sqrt(spatial * expansion)   ← geometric gate
-  8. Heatmap render: each candidate is a Gaussian blob of amplitude=structure.
+                    - structure = w_spatial*spatial + w_expansion*expansion
+  9. Heatmap render: each candidate is a Gaussian blob of amplitude=structure.
                     Pixel-wise max over candidates → ripple_heatmap.
-  9. Grid pooling : structure_grid = max-pool ripple_heatmap over the R×C grid.
- 10. Activity gate (per-cell):
-                    motion_density and edge_density use soft saturation
-                    x / (x + cap) instead of hard clip → no plateau at the cap.
+ 10. Grid pooling : structure_grid = max-pool ripple_heatmap over the R×C grid.
+ 11. Activity gate (per-cell):
+                    motion/edge now computed on homography-aligned frames so
+                    camera shake doesn't inflate the density metrics.
                     activity_grid = 0.5 * motion_soft + 0.5 * edge_soft
- 11. Fusion      : raw_score = activity_grid * structure_grid
-                    (gated multiplicatively — pixel jitter w/o structure stays low,
-                    and static reflections w/o motion also stay low.)
- 12. Sliding windows: short / mid / long deques per cell (unchanged API).
+ 12. Fusion      : raw_score = activity_grid * structure_grid
+ 13. Sliding windows: short / mid / long deques per cell (unchanged API).
 
 Public surface unchanged: RippleAlgoConfig, ActivityResult, RippleDetector,
 activity_level, run_on_video.  Legacy helpers `_radial_edge_score`,
@@ -67,6 +73,9 @@ class RippleAlgoConfig:
     clahe_before_blur: bool = True
     input_scale: float = 1.0
 
+    # -- Visualization ----------------------------------------------------
+    heatmap_colormap: int = cv2.COLORMAP_VIRIDIS  # cv2.COLORMAP_JET, VIRIDIS, INFERNO, etc.
+
     # -- Specular highlight suppression -----------------------------------
     use_specular_mask: bool = True
     specular_v_thresh: int = 220
@@ -84,8 +93,8 @@ class RippleAlgoConfig:
     # -- Edges -------------------------------------------------------------
     # Lower thresholds catch fainter ripple edges; relies on the radial-bin
     # peak score + MOG2 + structure-gating to suppress the extra noise.
-    canny_low: int = 15
-    canny_high: int = 60
+    canny_low: int = 40
+    canny_high: int = 120
 
     # -- Radial ring -------------------------------------------------------
     r_min: int = 8
@@ -107,6 +116,22 @@ class RippleAlgoConfig:
     candidate_max_count: int = 16
     candidate_sigma: float = 18.0           # Gaussian blob sigma (px) for render
     candidate_min_score: float = 0.05
+
+    # -- Camera motion compensation ----------------------------------------
+    use_homography: bool = True
+    klt_max_corners: int = 200
+    klt_quality_level: float = 0.01
+    klt_min_distance: int = 10
+    ransac_reproj_thresh: float = 5.0
+    homography_min_inliers: int = 20
+
+    # -- Divergence peak detection -----------------------------------------
+    div_peak_sigma: float = 8.0             # smoothing σ before peak search
+    div_peak_threshold: float = 0.05        # min div value for a candidate
+
+    # -- Temporal tracking -------------------------------------------------
+    tracker_max_dist: int = 50              # max pixel gap to link across frames
+    tracker_min_age: int = 3               # frames a peak must persist to pass
 
     # -- Soft saturation caps (replace v1 hard caps) ----------------------
     motion_cap: float = 0.03
@@ -376,24 +401,103 @@ def _ring_pool_mean(field: np.ndarray, cx: int, cy: int,
 # ---------------------------------------------------------------------------
 
 
-def _find_candidate_centers(dynamic_mask: np.ndarray,
-                            cfg: RippleAlgoConfig) -> List[Tuple[int, int, int]]:
-    """Return [(cx, cy, area)] for the top candidates of dynamic_mask."""
-    mask = dynamic_mask.astype(np.uint8)
-    if cfg.candidate_close_kernel > 1:
-        k = np.ones((cfg.candidate_close_kernel, cfg.candidate_close_kernel), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
 
-    n, _, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    out: List[Tuple[int, int, int]] = []
+def _estimate_homography(
+    prev_gray: np.ndarray, gray: np.ndarray, cfg: RippleAlgoConfig
+) -> Optional[np.ndarray]:
+    """KLT + RANSAC homography mapping prev_gray → gray coordinate frame.
+
+    Returns None when camera motion is negligible or the fit is unreliable.
+    """
+    corners = cv2.goodFeaturesToTrack(
+        prev_gray, cfg.klt_max_corners, cfg.klt_quality_level, cfg.klt_min_distance
+    )
+    if corners is None or len(corners) < 8:
+        return None
+    next_pts, status, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, corners, None)
+    if status is None:
+        return None
+    good_prev = corners[status.ravel() == 1]
+    good_next = next_pts[status.ravel() == 1]
+    if len(good_prev) < 8:
+        return None
+    homo, inlier_mask = cv2.findHomography(
+        good_prev, good_next, cv2.RANSAC, cfg.ransac_reproj_thresh
+    )
+    if homo is None:
+        return None
+    n_inliers = int(inlier_mask.sum()) if inlier_mask is not None else 0
+    if n_inliers < cfg.homography_min_inliers:
+        return None
+    return homo
+
+
+def _find_divergence_peaks(
+    div_smooth: np.ndarray, cfg: RippleAlgoConfig
+) -> List[Tuple[int, int, float]]:
+    """Local maxima of a pre-smoothed divergence field above threshold.
+
+    Non-maximum suppression via 3×3 dilation then connectedComponents to merge
+    adjacent sub-pixel peaks. Returns (cx, cy, peak_div) sorted high→low.
+    """
+    kernel = np.ones((3, 3), np.uint8)
+    dilated = cv2.dilate(div_smooth, kernel)
+    local_max = (
+        (div_smooth >= dilated) & (div_smooth > cfg.div_peak_threshold)
+    ).astype(np.uint8)
+    if not local_max.any():
+        return []
+    n, labels, _, centroids = cv2.connectedComponentsWithStats(
+        local_max, connectivity=8
+    )
+    peaks: List[Tuple[int, int, float]] = []
     for i in range(1, n):
-        area = int(stats[i, cv2.CC_STAT_AREA])
-        if area < cfg.candidate_min_area:
-            continue
-        cx, cy = centroids[i]
-        out.append((int(round(cx)), int(round(cy)), area))
-    out.sort(key=lambda t: t[2], reverse=True)
-    return out[: cfg.candidate_max_count]
+        cx_f, cy_f = centroids[i]
+        peak_val = float(div_smooth[labels == i].max())
+        peaks.append((int(round(cx_f)), int(round(cy_f)), peak_val))
+    peaks.sort(key=lambda t: t[2], reverse=True)
+    return peaks[: cfg.candidate_max_count]
+
+
+def _update_tracked_centers(
+    new_centers: List[Tuple[int, int, float]],
+    tracked: List[dict],
+    max_dist: int,
+    min_age: int,
+) -> Tuple[List[dict], List[Tuple[int, int, float]]]:
+    """Greedy nearest-neighbour tracking across frames.
+
+    Returns (updated_state, stable_list) where stable_list contains only
+    tracks that have been continuously matched for at least min_age frames.
+    """
+    matched_new = [False] * len(new_centers)
+    updated: List[dict] = []
+
+    for track in tracked:
+        best_d = float(max_dist) + 1.0
+        best_j = -1
+        tcx, tcy = track["cx"], track["cy"]
+        for j, (ncx, ncy, _) in enumerate(new_centers):
+            if matched_new[j]:
+                continue
+            d = float(np.hypot(ncx - tcx, ncy - tcy))
+            if d < best_d:
+                best_d = d
+                best_j = j
+        if best_j >= 0:
+            ncx, ncy, nval = new_centers[best_j]
+            updated.append({"cx": ncx, "cy": ncy, "age": track["age"] + 1, "val": nval})
+            matched_new[best_j] = True
+        # unmatched tracks are dropped — ripple has dissipated
+
+    for j, (ncx, ncy, nval) in enumerate(new_centers):
+        if not matched_new[j]:
+            updated.append({"cx": ncx, "cy": ncy, "age": 1, "val": nval})
+
+    stable = [
+        (t["cx"], t["cy"], t["val"]) for t in updated if t["age"] >= min_age
+    ]
+    return updated, stable
 
 
 def _gaussian_patch(sigma: float) -> Tuple[np.ndarray, int]:
@@ -499,6 +603,7 @@ class RippleDetector:
         self._cached_shape: Optional[Tuple[int, int]] = None
         self._roi_resized: Optional[np.ndarray] = None
         self._last_activity: float = 0.0
+        self._tracked_centers: List[dict] = []
 
     def reset(self) -> None:
         self._reset_state()
@@ -606,23 +711,39 @@ class RippleDetector:
 
         gx, gy = _sobel_gradients(gray)
 
-        # ---- Inter-frame signals --------------------------------------
-        diff = cv2.absdiff(gray, self._prev_gray)
-        motion_mask = diff > cfg.diff_threshold
-        edge_xor = np.bitwise_xor(edges, self._prev_edges) > 0
+        # ---- Camera motion compensation --------------------------------
+        homo = None
+        if cfg.use_homography:
+            homo = _estimate_homography(self._prev_gray, gray, cfg)
 
-        # Weighted per-pixel evidence (used for grid density + candidate mask)
+        if homo is not None:
+            prev_aligned = cv2.warpPerspective(self._prev_gray, homo, (W, H))
+            prev_edges_aligned = cv2.warpPerspective(
+                self._prev_edges, homo, (W, H), flags=cv2.INTER_NEAREST
+            )
+        else:
+            prev_aligned = self._prev_gray
+            prev_edges_aligned = self._prev_edges
+
+        # ---- Inter-frame signals on aligned frames --------------------
+        diff = cv2.absdiff(gray, prev_aligned)
+        motion_mask = diff > cfg.diff_threshold
+        edge_xor = np.bitwise_xor(edges, prev_edges_aligned) > 0
+
         motion_field = motion_mask.astype(np.float32) * soft_fg
         edge_field = edge_xor.astype(np.float32) * soft_fg
 
-        # ---- Optical flow + divergence --------------------------------
-        flow = self._optical_flow(self._prev_gray, gray)
+        # ---- Optical flow on aligned frames ---------------------------
+        flow = self._optical_flow(prev_aligned, gray)
         div_pos = _compute_flow_divergence(flow)
 
-        # ---- Candidate proposal --------------------------------------
-        # active pixels = motion OR edge_xor, gated by soft_fg ≥ 0.5
-        active_pix = ((motion_mask | edge_xor) & (soft_fg >= 0.5)).astype(np.uint8)
-        candidates = _find_candidate_centers(active_pix, cfg)
+        # ---- Divergence peak detection + temporal tracking ------------
+        div_smooth = cv2.GaussianBlur(div_pos, (0, 0), cfg.div_peak_sigma)
+        div_peaks = _find_divergence_peaks(div_smooth, cfg)
+        self._tracked_centers, stable_peaks = _update_tracked_centers(
+            div_peaks, self._tracked_centers, cfg.tracker_max_dist, cfg.tracker_min_age
+        )
+        candidates = stable_peaks  # [(cx, cy, div_val)]
 
         # ---- Score each candidate ------------------------------------
         scored: List[Tuple[int, int, float]] = []
@@ -721,6 +842,29 @@ def activity_level(score: float) -> str:
     return "intense"
 
 
+# Colormap suggestions for different purposes
+# VIRIDIS (default): perceptually uniform, good for all eye types
+# INFERNO: high contrast, emphasizes peaks well
+# JET: traditional but has perceptual issues
+# TURBO: modern alternative to JET, better perceptual uniformity
+def get_colormap(name: str) -> int:
+    """Get OpenCV colormap ID by name."""
+    colormaps = {
+        "viridis": cv2.COLORMAP_VIRIDIS,
+        "inferno": cv2.COLORMAP_INFERNO,
+        "jet": cv2.COLORMAP_JET,
+        "hot": cv2.COLORMAP_HOT,
+        "cool": cv2.COLORMAP_COOL,
+        "spring": cv2.COLORMAP_SPRING,
+        "summer": cv2.COLORMAP_SUMMER,
+        "autumn": cv2.COLORMAP_AUTUMN,
+        "winter": cv2.COLORMAP_WINTER,
+        "bone": cv2.COLORMAP_BONE,
+        "rainbow": cv2.COLORMAP_RAINBOW,
+    }
+    return colormaps.get(name.lower(), cv2.COLORMAP_VIRIDIS)
+
+
 _LEVEL_COLOR_BGR = {
     "idle": (128, 128, 128),
     "low": (200, 200, 0),
@@ -778,7 +922,7 @@ def run_on_video(
 
             overlay = cv2.applyColorMap(
                 (result.heatmap * 255).astype(np.uint8),
-                cv2.COLORMAP_JET,
+                cfg.heatmap_colormap,
             )
             vis = cv2.addWeighted(frame, 0.55, overlay, 0.45, 0)
 
