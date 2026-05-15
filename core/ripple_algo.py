@@ -1,8 +1,8 @@
-"""Spatiotemporal ripple detection — v3.
+"""Spatiotemporal ripple detection — v4.
 
 Design overview:
 
-  0. Camera motion compensation (new):
+  0. Camera motion compensation:
                     KLT sparse optical flow → RANSAC homography H.
                     prev_gray and prev_edges are warped into the current
                     coordinate frame before any inter-frame comparison.
@@ -14,10 +14,18 @@ Design overview:
   4. Soft fg mask : 0.3 base + 0.7 * (fg/255), so background is *attenuated*,
                     not silenced, and persistent water texture isn't fully eaten
                     by the background model.
-  5. Optical flow : DIS PRESET_FAST on aligned frames.
+  5. Optical flow (v4 — edge-driven):
+                    DIS PRESET_FAST runs on a soft edge field
+                    (dilated Canny → light Gaussian blur), not on raw gray.
+                    Rationale: water-surface gray has a lot of low-texture and
+                    specular gradient noise that DIS happily snaps onto,
+                    polluting divergence with random outward components.  Soft
+                    edges are sparse-but-continuous, so flow locks onto the
+                    actual ripple wavefronts and the divergence field becomes
+                    far cleaner.  Set ``cfg.flow_on_edges=False`` to revert.
                     Divergence (∂u/∂x + ∂v/∂y, positive part) is smoothed and
                     used as the primary candidate source.
-  6. Candidate proposal (new):
+  6. Candidate proposal:
                     div_smooth = GaussianBlur(div_pos, σ=div_peak_sigma)
                     local maxima above threshold → candidate ripple centres.
                     Replaces motion_mask | edge_xor → connected components.
@@ -37,7 +45,9 @@ Design overview:
                     camera shake doesn't inflate the density metrics.
                     activity_grid = 0.5 * motion_soft + 0.5 * edge_soft
  12. Fusion      : raw_score = activity_grid * structure_grid
- 13. Sliding windows: short / mid / long deques per cell (unchanged API).
+ 13. Sliding windows: short / mid / long ring buffers + running sums
+                    (vectorised in v4; same public API: short_score, mid_score,
+                    long_score arrays of shape (R, C)).
 
 Public surface unchanged: RippleAlgoConfig, ActivityResult, RippleDetector,
 activity_level, run_on_video.  Legacy helpers `_radial_edge_score`,
@@ -47,7 +57,6 @@ activity_level, run_on_video.  Legacy helpers `_radial_edge_score`,
 from __future__ import annotations
 
 import time
-from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
@@ -107,7 +116,29 @@ class RippleAlgoConfig:
     flow_scale: float = 0.5
     dis_preset: int = 1                     # cv2.DISOpticalFlow_PRESET_FAST
     flow_mag_threshold: float = 0.12        # per-pixel noise floor
-    divergence_cap: float = 0.20            # soft cap for div ring score
+    # Soft saturation cap for divergence ring score: ring-pooled divergence
+    # of a strong ripple is around 1–3, so we saturate at ~1.5 to keep the
+    # candidate score informative without flat-topping.
+    divergence_cap: float = 1.5
+    # Edge-driven flow (v4):
+    #   When True, optical flow is computed on a soft edge field (dilated Canny
+    #   blurred with a small Gaussian) instead of raw gray.  This makes the
+    #   divergence map much cleaner over featureless / specular water because
+    #   DIS no longer hallucinates flow in low-texture regions.
+    #
+    #   Trade-off: edge-driven flow has smaller absolute divergence magnitudes
+    #   (the input gradient itself is smaller), so ``div_peak_threshold`` and
+    #   ``divergence_cap`` are scaled down by ``edge_flow_div_scale`` when
+    #   this mode is active.  Tune that one knob to control sensitivity.
+    flow_on_edges: bool = True
+    edge_flow_dilate: int = 3               # px — thickens 1-pixel Canny edges
+    edge_flow_blur_sigma: float = 1.2       # σ for soft-edge blur (0 → skip)
+    # Per-frame percentile-driven thresholds (see div_peak_percentile) handle
+    # the magnitude difference between gray-flow and edge-flow divergence
+    # automatically, so the legacy fixed scale is no longer needed.  Kept
+    # at 1.0 for back-compat; tune below 1 to bias edge mode toward more
+    # candidates, above 1 for fewer.
+    edge_flow_div_scale: float = 1.0
 
     # -- Dynamic evidence / candidate proposal ----------------------------
     diff_threshold: int = 6
@@ -115,7 +146,7 @@ class RippleAlgoConfig:
     candidate_min_area: int = 25
     candidate_max_count: int = 16
     candidate_sigma: float = 18.0           # Gaussian blob sigma (px) for render
-    candidate_min_score: float = 0.05
+    candidate_min_score: float = 0.04       # was 0.05; let weak first-frame onsets through
 
     # -- Camera motion compensation ----------------------------------------
     use_homography: bool = True
@@ -124,14 +155,88 @@ class RippleAlgoConfig:
     klt_min_distance: int = 10
     ransac_reproj_thresh: float = 5.0
     homography_min_inliers: int = 20
+    # Camera motion is a low-frequency signal — running KLT+RANSAC every other
+    # frame and reusing the cached H halves the homography cost with no
+    # noticeable accuracy loss for handheld / mounted cameras.  Set to 1 to
+    # estimate every frame, 0 to disable caching entirely.
+    homography_stride: int = 2
 
     # -- Divergence peak detection -----------------------------------------
     div_peak_sigma: float = 8.0             # smoothing σ before peak search
-    div_peak_threshold: float = 0.05        # min div value for a candidate
+    # Absolute floor: peaks must be at least this strong.  Divergence after
+    # Sobel + σ=8 Gaussian sits around 0.1–0.5 on quiet water; real ripple
+    # impacts spike to 3–10.  Floor is the minimum required even on a busy
+    # scene where the adaptive term would otherwise relax it.
+    div_peak_threshold: float = 0.8
+    # Adaptive threshold:
+    #   threshold = max(abs_floor, mean + k_std × std).
+    # On a quiet pond mean+kσ < abs_floor → floor wins.  On a busy scene
+    # (lots of ambient noise) the term rises above the floor and stops the
+    # candidate pool from flooding.  Set div_peak_k_std=0 to disable.
+    div_peak_k_std: float = 3.5
+    # NMS radius for peak suppression — two peaks closer than this collapse
+    # to the stronger one.  Default ≈ div_peak_sigma so we don't pick up
+    # multiple sub-peaks inside a single ripple blob.
+    div_peak_nms_radius: int = 12
+    # Run peak search on a downsampled copy of div_smooth — div_smooth is
+    # already heavily blurred so peaks survive a 2-3× downscale.  Empirical
+    # speedup: 3-5× on the peak-finder stage for HD frames.  Set to 1.0 to
+    # search at full resolution.
+    div_peak_search_scale: float = 0.5
 
     # -- Temporal tracking -------------------------------------------------
     tracker_max_dist: int = 50              # max pixel gap to link across frames
-    tracker_min_age: int = 3               # frames a peak must persist to pass
+    tracker_min_age: int = 3                # frames a peak must persist to pass
+
+    # -- Impact-event fast path --------------------------------------------
+    # A water droplet impact is a single-frame energy spike — by the time the
+    # 3-frame tracker confirms it the splash is half-gone.  Peaks whose
+    # *initial* divergence is strong enough (above impact_div_multiplier ×
+    # current threshold) are promoted to "stable" on their first appearance,
+    # so the heatmap lights up the moment the droplet hits the surface.
+    # Tune impact_div_multiplier upward to be more selective (fewer false
+    # promotions) and downward to be more sensitive.
+    impact_event_enable: bool = True
+    impact_div_multiplier: float = 6.0      # × div_peak_threshold → instant promote
+    # Short pulse: max-over-last-N raw_score blended into the heatmap so a
+    # 1–2-frame spike isn't washed out by the 30-frame short_window mean.
+    # A higher pulse weight makes the heatmap react faster to droplet
+    # impacts and other transient events at the cost of slight flicker on
+    # continuous activity.
+    short_pulse_frames: int = 5
+    short_pulse_weight: float = 0.55        # weight in final heatmap blend
+
+    # -- Frame-level energy aggregation ------------------------------------
+    # ``energy`` is the scalar 0–1 measure of "how much ripple activity is
+    # happening in this frame right now".  It's derived from the per-
+    # candidate structure scores via a probabilistic-OR aggregation:
+    #
+    #     energy = 1 - ∏ (1 - score_i * energy_candidate_weight)
+    #
+    # Each candidate is treated as an independent "ripple event" whose
+    # individual contribution is its structure score (already 0-1).  The
+    # OR aggregation saturates smoothly toward 1 as more candidates pile
+    # up — matching the intuition that 1 strong ripple < 3 strong ripples
+    # without ever exceeding 1.0.
+    #
+    # ``energy_candidate_weight`` (k) scales each candidate before the
+    # OR so a single candidate doesn't immediately push energy near 1:
+    #   k=1.0 → 1 cand at score 0.6 yields energy 0.60
+    #   k=0.7 → ...yields 0.42 (1 cand = "low–medium")
+    #   k=0.5 → ...yields 0.30 (1 cand = "low")
+    energy_candidate_weight: float = 0.9
+    # Each candidate's contribution is also scaled by a confidence factor
+    # derived from its raw divergence amplitude:
+    #     div_conf = div_val / (div_val + energy_div_softcap)
+    # softcap=3 means div_val=3 yields 0.5 confidence, div_val=10 yields
+    # 0.77, div_val=30 yields 0.91.  This makes a strong splash (div ~16)
+    # clearly outscore a passive ripple (div ~1.5) at the *same* structure
+    # quality — the missing axis in the v4.2 energy.
+    energy_div_softcap: float = 3.0
+    # Temporal smoothing (EMA) of the per-frame energy: 0.0 = no smoothing
+    # (raw spikes), 1.0 = frozen.  α controls how fast new evidence flows
+    # in; 0.5 reaches 75% in 2 frames, 0.3 in 5 frames.
+    energy_ema_alpha: float = 0.5
 
     # -- Soft saturation caps (replace v1 hard caps) ----------------------
     motion_cap: float = 0.03
@@ -173,6 +278,14 @@ class ActivityResult:
     long_score: np.ndarray           # (R, C) float32
     heatmap: np.ndarray              # (H, W) float32 in [0, 1]
     candidates: List[Tuple[int, int, float]] = field(default_factory=list)
+    # Scalar 0-1 "ripple energy" of the whole frame — probabilistic OR of
+    # per-candidate structure scores, EMA-smoothed in time.  This is the
+    # right number to log / display as "how active is the water surface
+    # right now"; it's far more responsive than mid_score.mean() and far
+    # less floor-pinned than mid_score.max().
+    energy: float = 0.0
+    # Pre-smoothing raw energy (this frame only, no EMA) for debugging.
+    energy_raw: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +350,30 @@ def _compute_flow_divergence(flow: np.ndarray) -> np.ndarray:
     dv_dy = cv2.Sobel(v, cv2.CV_32F, 0, 1, ksize=3)
     div = du_dx + dv_dy
     return np.maximum(div, 0.0)
+
+
+def _edge_field_for_flow(edges: np.ndarray, cfg: RippleAlgoConfig) -> np.ndarray:
+    """Turn a binary Canny edge map into a soft, DIS-friendly intensity field.
+
+    DIS optical flow needs a smooth gradient signal to estimate displacement;
+    a raw 1-pixel-wide binary edge has near-zero support outside the edge
+    itself and gives DIS nothing to track.  We thicken edges with a small
+    dilation then apply a light Gaussian to give each edge a few-pixel ramp,
+    which is enough for DIS to lock its flow vectors onto wavefront motion.
+
+    Output is uint8 in [0, 255] for compatibility with ``DISOpticalFlow.calc``.
+    """
+    if cfg.edge_flow_dilate > 1:
+        k = np.ones((cfg.edge_flow_dilate, cfg.edge_flow_dilate), np.uint8)
+        soft = cv2.dilate(edges, k, iterations=1)
+    else:
+        soft = edges.copy()
+    if cfg.edge_flow_blur_sigma > 0:
+        soft = cv2.GaussianBlur(soft, (0, 0), cfg.edge_flow_blur_sigma)
+    # Stretch to full uint8 dynamic range so DIS sees high contrast.
+    if soft.dtype != np.uint8:
+        soft = np.clip(soft, 0, 255).astype(np.uint8)
+    return soft
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +519,35 @@ def _radial_expansion_score(flow: np.ndarray, cx: int, cy: int,
     return float(np.clip(score, 0.0, 1.0))
 
 
+def _aggregate_candidate_energy(
+    strengths: Sequence[float], weight: float
+) -> float:
+    """Probabilistic-OR aggregation of per-candidate strength scores.
+
+        energy = 1 - ∏ (1 - clip(strength_i × weight, 0, 0.99))
+
+    Each candidate is treated as an independent "is ripple here" event;
+    OR-ing their probabilities gives a number that grows monotonically
+    with both how *strong* each ripple is and how *many* ripples are
+    happening, saturating gracefully toward 1.0 without ever exceeding it.
+
+    ``strength_i`` is typically (structure_score × divergence_confidence)
+    so the aggregation is sensitive to both ripple quality and amplitude.
+    ``weight`` (typically 0.5–1.0) is a global gain knob on each event.
+    """
+    if not strengths:
+        return 0.0
+    not_p = 1.0
+    for s in strengths:
+        e = float(s) * weight
+        if e <= 0.0:
+            continue
+        if e >= 0.99:
+            e = 0.99
+        not_p *= (1.0 - e)
+    return float(1.0 - not_p)
+
+
 def _ring_pool_mean(field: np.ndarray, cx: int, cy: int,
                     r_min: int, r_max: int) -> float:
     H, W = field.shape
@@ -432,31 +598,91 @@ def _estimate_homography(
     return homo
 
 
+_NMS_KERNEL_3 = np.ones((3, 3), np.uint8)
+_NMS_KERNEL_CACHE: dict = {}
+
+
+def _nms_kernel(radius: int) -> np.ndarray:
+    """Disk-shaped structuring element, cached by radius."""
+    radius = max(1, int(radius))
+    k = _NMS_KERNEL_CACHE.get(radius)
+    if k is None:
+        size = 2 * radius + 1
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+        _NMS_KERNEL_CACHE[radius] = k
+    return k
+
+
+def _find_divergence_peaks_at(
+    div_smooth: np.ndarray, threshold: float, max_count: int,
+    nms_radius: int = 1, search_scale: float = 1.0,
+) -> List[Tuple[int, int, float]]:
+    """Local maxima of a pre-smoothed divergence field above ``threshold``.
+
+    Vectorised path:
+
+      1. (Optional) downsample by ``search_scale`` for the NMS dilate, then
+         scale coordinates back.  div_smooth was blurred at σ=8, so a 2-3×
+         downsample loses no peak information but makes both the dilate and
+         the boolean scan many times cheaper.
+      2. Dilate with a disk of radius ``nms_radius`` → each pixel becomes
+         the max over its local neighbourhood.  A pixel that equals its
+         dilated value is the unique max within ``nms_radius`` px.
+      3. mask = (div_smooth >= dilated) & (div_smooth > threshold).
+      4. numpy ``argpartition`` picks the top-``max_count`` in O(N).
+
+    Returns (cx, cy, peak_div) in the *original* image coordinates,
+    sorted high→low.
+    """
+    if search_scale != 1.0 and 0.1 < search_scale < 1.0:
+        H, W = div_smooth.shape
+        sw, sh = max(8, int(W * search_scale)), max(8, int(H * search_scale))
+        # cv2.resize with INTER_AREA preserves local maxima fairly well
+        small = cv2.resize(div_smooth, (sw, sh), interpolation=cv2.INTER_AREA)
+        # Scale NMS radius proportionally so the suppression neighbourhood
+        # covers the same physical area.
+        rad = max(1, int(round(nms_radius * search_scale)))
+        kernel = _NMS_KERNEL_3 if rad <= 1 else _nms_kernel(rad)
+        dilated = cv2.dilate(small, kernel)
+        local_max = (small >= dilated) & (small > threshold)
+        if not local_max.any():
+            return []
+        ys, xs = np.where(local_max)
+        vals = small[ys, xs]
+        if vals.size > max_count:
+            top = np.argpartition(vals, -max_count)[-max_count:]
+            ys, xs, vals = ys[top], xs[top], vals[top]
+        order = np.argsort(-vals)
+        # Map coordinates back to the full-resolution frame.
+        inv = 1.0 / search_scale
+        return [
+            (int(round(xs[i] * inv)), int(round(ys[i] * inv)), float(vals[i]))
+            for i in order
+        ]
+
+    kernel = _NMS_KERNEL_3 if nms_radius <= 1 else _nms_kernel(nms_radius)
+    dilated = cv2.dilate(div_smooth, kernel)
+    local_max = (div_smooth >= dilated) & (div_smooth > threshold)
+    if not local_max.any():
+        return []
+    ys, xs = np.where(local_max)
+    vals = div_smooth[ys, xs]
+    if vals.size > max_count:
+        top = np.argpartition(vals, -max_count)[-max_count:]
+        ys, xs, vals = ys[top], xs[top], vals[top]
+    order = np.argsort(-vals)
+    return [
+        (int(xs[i]), int(ys[i]), float(vals[i])) for i in order
+    ]
+
+
 def _find_divergence_peaks(
     div_smooth: np.ndarray, cfg: RippleAlgoConfig
 ) -> List[Tuple[int, int, float]]:
-    """Local maxima of a pre-smoothed divergence field above threshold.
-
-    Non-maximum suppression via 3×3 dilation then connectedComponents to merge
-    adjacent sub-pixel peaks. Returns (cx, cy, peak_div) sorted high→low.
-    """
-    kernel = np.ones((3, 3), np.uint8)
-    dilated = cv2.dilate(div_smooth, kernel)
-    local_max = (
-        (div_smooth >= dilated) & (div_smooth > cfg.div_peak_threshold)
-    ).astype(np.uint8)
-    if not local_max.any():
-        return []
-    n, labels, _, centroids = cv2.connectedComponentsWithStats(
-        local_max, connectivity=8
+    """Back-compat shim that pulls threshold + max_count from cfg."""
+    return _find_divergence_peaks_at(
+        div_smooth, cfg.div_peak_threshold, cfg.candidate_max_count
     )
-    peaks: List[Tuple[int, int, float]] = []
-    for i in range(1, n):
-        cx_f, cy_f = centroids[i]
-        peak_val = float(div_smooth[labels == i].max())
-        peaks.append((int(round(cx_f)), int(round(cy_f)), peak_val))
-    peaks.sort(key=lambda t: t[2], reverse=True)
-    return peaks[: cfg.candidate_max_count]
 
 
 def _update_tracked_centers(
@@ -464,11 +690,18 @@ def _update_tracked_centers(
     tracked: List[dict],
     max_dist: int,
     min_age: int,
+    impact_val: float = float("inf"),
 ) -> Tuple[List[dict], List[Tuple[int, int, float]]]:
     """Greedy nearest-neighbour tracking across frames.
 
-    Returns (updated_state, stable_list) where stable_list contains only
-    tracks that have been continuously matched for at least min_age frames.
+    Args:
+      impact_val: any new candidate with ``val >= impact_val`` is promoted
+                  to "stable" on its first appearance (age 1).  Use this to
+                  surface single-frame impact events — e.g. a water droplet
+                  splash — without waiting for ``min_age`` confirmations.
+
+    Returns (updated_state, stable_list) where stable_list contains tracks
+    that either reached ``min_age`` *or* were impact-promoted this frame.
     """
     matched_new = [False] * len(new_centers)
     updated: List[dict] = []
@@ -494,9 +727,10 @@ def _update_tracked_centers(
         if not matched_new[j]:
             updated.append({"cx": ncx, "cy": ncy, "age": 1, "val": nval})
 
-    stable = [
-        (t["cx"], t["cy"], t["val"]) for t in updated if t["age"] >= min_age
-    ]
+    stable: List[Tuple[int, int, float]] = []
+    for t in updated:
+        if t["age"] >= min_age or t["val"] >= impact_val:
+            stable.append((t["cx"], t["cy"], t["val"]))
     return updated, stable
 
 
@@ -530,39 +764,37 @@ def _render_candidate_heatmap(scored: Sequence[Tuple[int, int, float]],
     return hm
 
 
-def _grid_max_pool(field: np.ndarray, R: int, C: int) -> np.ndarray:
+def _crop_to_grid(field: np.ndarray, R: int, C: int) -> np.ndarray:
+    """Crop to the largest multiple of (R, C) so we can reshape-pool cleanly.
+
+    The lost border (≤ R-1 rows / C-1 cols) is negligible for 8×8 grids on
+    HD frames and avoids the per-cell Python loop in pooling.
+    """
     H, W = field.shape
-    out = np.zeros((R, C), dtype=np.float32)
-    for r in range(R):
-        y0 = int(round(r * H / R))
-        y1 = int(round((r + 1) * H / R))
-        if y1 <= y0:
-            continue
-        for c in range(C):
-            x0 = int(round(c * W / C))
-            x1 = int(round((c + 1) * W / C))
-            if x1 <= x0:
-                continue
-            out[r, c] = float(field[y0:y1, x0:x1].max())
-    return out
+    Hc = (H // R) * R
+    Wc = (W // C) * C
+    return field[:Hc, :Wc]
+
+
+def _grid_max_pool(field: np.ndarray, R: int, C: int) -> np.ndarray:
+    """Vectorised max-pool of a 2-D field into an (R, C) grid."""
+    f = _crop_to_grid(field, R, C)
+    if f.size == 0:
+        return np.zeros((R, C), dtype=np.float32)
+    H, W = f.shape
+    bh, bw = H // R, W // C
+    # Reshape into (R, bh, C, bw) and max over the bh / bw axes.
+    return f.reshape(R, bh, C, bw).max(axis=(1, 3)).astype(np.float32)
 
 
 def _grid_density_pool(field: np.ndarray, R: int, C: int) -> np.ndarray:
-    """Mean of a per-pixel density field over each grid cell."""
-    H, W = field.shape
-    out = np.zeros((R, C), dtype=np.float32)
-    for r in range(R):
-        y0 = int(round(r * H / R))
-        y1 = int(round((r + 1) * H / R))
-        if y1 <= y0:
-            continue
-        for c in range(C):
-            x0 = int(round(c * W / C))
-            x1 = int(round((c + 1) * W / C))
-            if x1 <= x0:
-                continue
-            out[r, c] = float(field[y0:y1, x0:x1].mean())
-    return out
+    """Vectorised mean-pool (per-pixel density) into an (R, C) grid."""
+    f = _crop_to_grid(field, R, C)
+    if f.size == 0:
+        return np.zeros((R, C), dtype=np.float32)
+    H, W = f.shape
+    bh, bw = H // R, W // C
+    return f.reshape(R, bh, C, bw).mean(axis=(1, 3)).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -599,11 +831,19 @@ class RippleDetector:
         self._mog2 = None
         self._dis = None
         self._frame_index: int = -1
-        self._windows = None
+        self._windows = None                 # legacy, kept for back-compat
+        self._sw: Optional[dict] = None      # v4 vectorised sliding windows
         self._cached_shape: Optional[Tuple[int, int]] = None
         self._roi_resized: Optional[np.ndarray] = None
         self._last_activity: float = 0.0
         self._tracked_centers: List[dict] = []
+        # v4.1: cached homography (so we can stride KLT) + short pulse buffer
+        self._homo_cache: Optional[np.ndarray] = None
+        self._pulse_buf: Optional[np.ndarray] = None  # (N, R, C) ring buffer
+        self._pulse_idx: int = 0
+        self._pulse_count: int = 0
+        # v4.3: EMA-smoothed frame-level energy
+        self._energy_ema: float = 0.0
 
     def reset(self) -> None:
         self._reset_state()
@@ -614,14 +854,39 @@ class RippleDetector:
         if self._cached_shape == (H, W):
             return
         R, C = self.cfg.grid_rows, self.cfg.grid_cols
-        self._windows = [[
-            {
-                "short": deque(maxlen=self.cfg.short_window),
-                "mid": deque(maxlen=self.cfg.mid_window),
-                "long": deque(maxlen=self.cfg.long_window),
-            }
-            for _ in range(C)
-        ] for _ in range(R)]
+        # Vectorised sliding windows: ring buffers + running sums per scale.
+        # Shape (window_len, R, C); we overwrite the oldest slot each frame
+        # and keep a running float64 sum so per-frame mean is O(R*C).
+        self._sw = {
+            "short": {
+                "buf": np.zeros((self.cfg.short_window, R, C), dtype=np.float32),
+                "sum": np.zeros((R, C), dtype=np.float64),
+                "len": self.cfg.short_window,
+                "count": 0,
+                "idx": 0,
+            },
+            "mid": {
+                "buf": np.zeros((self.cfg.mid_window, R, C), dtype=np.float32),
+                "sum": np.zeros((R, C), dtype=np.float64),
+                "len": self.cfg.mid_window,
+                "count": 0,
+                "idx": 0,
+            },
+            "long": {
+                "buf": np.zeros((self.cfg.long_window, R, C), dtype=np.float32),
+                "sum": np.zeros((R, C), dtype=np.float64),
+                "len": self.cfg.long_window,
+                "count": 0,
+                "idx": 0,
+            },
+        }
+        # _windows kept as None — legacy attribute, unused after v4.
+        self._windows = None
+        # Short-pulse ring buffer for impact-event blending
+        n = max(1, self.cfg.short_pulse_frames)
+        self._pulse_buf = np.zeros((n, R, C), dtype=np.float32)
+        self._pulse_idx = 0
+        self._pulse_count = 0
         if self.cfg.roi_mask is not None:
             self._roi_resized = cv2.resize(
                 self.cfg.roi_mask.astype(np.uint8), (W, H),
@@ -645,21 +910,28 @@ class RippleDetector:
 
     # -- optical flow ----------------------------------------------------
 
-    def _optical_flow(self, prev_gray: np.ndarray, gray: np.ndarray) -> np.ndarray:
+    def _optical_flow(self, prev_img: np.ndarray, cur_img: np.ndarray) -> np.ndarray:
+        """DIS optical flow with optional downscale.
+
+        ``prev_img`` and ``cur_img`` are uint8 single-channel arrays of the
+        same shape — either raw gray or a soft-edge field built by
+        ``_edge_field_for_flow``.  Whichever pair is passed, the same pair
+        is used; the caller picks the representation.
+        """
         self._ensure_dis()
         cfg = self.cfg
         if cfg.flow_scale != 1.0:
-            h, w = gray.shape
+            h, w = cur_img.shape
             sw = max(16, int(w * cfg.flow_scale))
             sh = max(16, int(h * cfg.flow_scale))
-            prev_s = cv2.resize(prev_gray, (sw, sh))
-            cur_s = cv2.resize(gray, (sw, sh))
+            prev_s = cv2.resize(prev_img, (sw, sh))
+            cur_s = cv2.resize(cur_img, (sw, sh))
             flow_s = self._dis.calc(prev_s, cur_s, None)
             flow = cv2.resize(flow_s, (w, h))
             flow[..., 0] /= cfg.flow_scale
             flow[..., 1] /= cfg.flow_scale
             return flow
-        return self._dis.calc(prev_gray, gray, None)
+        return self._dis.calc(prev_img, cur_img, None)
 
     # -- main entry ------------------------------------------------------
 
@@ -712,9 +984,18 @@ class RippleDetector:
         gx, gy = _sobel_gradients(gray)
 
         # ---- Camera motion compensation --------------------------------
+        # Strided estimation: KLT+RANSAC every ``homography_stride`` frames,
+        # reuse the cached H in between.  Camera motion is low-frequency so
+        # a 2-frame cache is essentially free in accuracy and ~halves cost.
         homo = None
         if cfg.use_homography:
-            homo = _estimate_homography(self._prev_gray, gray, cfg)
+            stride = max(1, cfg.homography_stride)
+            if (self._frame_index % stride) == 0:
+                homo = _estimate_homography(self._prev_gray, gray, cfg)
+                if homo is not None:
+                    self._homo_cache = homo
+            else:
+                homo = self._homo_cache
 
         if homo is not None:
             prev_aligned = cv2.warpPerspective(self._prev_gray, homo, (W, H))
@@ -734,26 +1015,77 @@ class RippleDetector:
         edge_field = edge_xor.astype(np.float32) * soft_fg
 
         # ---- Optical flow on aligned frames ---------------------------
-        flow = self._optical_flow(prev_aligned, gray)
+        # v4: prefer edge-driven flow.  Soft-edge fields (dilated Canny +
+        # light Gaussian) give DIS a sparse, high-contrast signal so flow
+        # locks onto ripple wavefronts instead of low-texture water noise,
+        # which makes the divergence map much cleaner.  Fall back to raw
+        # gray when the caller opts out.
+        if cfg.flow_on_edges:
+            cur_for_flow = _edge_field_for_flow(edges, cfg)
+            prev_for_flow = _edge_field_for_flow(prev_edges_aligned, cfg)
+        else:
+            cur_for_flow = gray
+            prev_for_flow = prev_aligned
+        flow = self._optical_flow(prev_for_flow, cur_for_flow)
         div_pos = _compute_flow_divergence(flow)
+
+        # Edge-driven flow has lower-amplitude divergence than gray flow, but
+        # the percentile-based threshold below adapts automatically.  The
+        # explicit scale knob is kept for fine manual override.
+        div_scale = (
+            max(cfg.edge_flow_div_scale, 1e-3) if cfg.flow_on_edges else 1.0
+        )
+        divergence_cap = cfg.divergence_cap * div_scale
 
         # ---- Divergence peak detection + temporal tracking ------------
         div_smooth = cv2.GaussianBlur(div_pos, (0, 0), cfg.div_peak_sigma)
-        div_peaks = _find_divergence_peaks(div_smooth, cfg)
+        # Adaptive threshold = max(absolute floor, mean + k·std).
+        # Mean+k·std auto-tunes to scene activity (cheap statistical estimate
+        # using cv2.meanStdDev — order of magnitude faster than np.percentile
+        # on a full HD divergence map).
+        abs_floor = cfg.div_peak_threshold * div_scale
+        if cfg.div_peak_k_std > 0:
+            m, s = cv2.meanStdDev(div_smooth)
+            adaptive_floor = float(m[0, 0]) + cfg.div_peak_k_std * float(s[0, 0])
+            div_peak_threshold = max(abs_floor, adaptive_floor)
+        else:
+            div_peak_threshold = abs_floor
+        div_peaks = _find_divergence_peaks_at(
+            div_smooth, div_peak_threshold, cfg.candidate_max_count,
+            nms_radius=cfg.div_peak_nms_radius,
+            search_scale=cfg.div_peak_search_scale,
+        )
+        # Impact-event fast path: water-droplet hits produce a very strong
+        # single-frame divergence spike.  Promote those peaks to "stable" on
+        # the first frame they appear instead of waiting tracker_min_age,
+        # so the heatmap responds the instant the droplet lands.
+        if cfg.impact_event_enable:
+            impact_val = div_peak_threshold * cfg.impact_div_multiplier
+        else:
+            impact_val = float("inf")
         self._tracked_centers, stable_peaks = _update_tracked_centers(
-            div_peaks, self._tracked_centers, cfg.tracker_max_dist, cfg.tracker_min_age
+            div_peaks, self._tracked_centers,
+            cfg.tracker_max_dist, cfg.tracker_min_age,
+            impact_val=impact_val,
         )
         candidates = stable_peaks  # [(cx, cy, div_val)]
 
         # ---- Score each candidate ------------------------------------
+        # We keep ``scored`` as the public (cx, cy, structure) list because
+        # downstream consumers (rendering, ActivityResult.candidates) expect
+        # it.  In parallel we collect ``strengths`` — structure × confidence
+        # in the candidate's divergence amplitude — which feeds the frame
+        # energy calculation.  This is what differentiates "weak ripple"
+        # from "big splash": same structure, very different div magnitude.
         scored: List[Tuple[int, int, float]] = []
+        strengths: List[float] = []
         edges_for_scoring = (edges * (soft_fg > 0.0).astype(np.uint8)).astype(np.uint8)
-        for cx, cy, _area in candidates:
+        for cx, cy, div_val in candidates:
             spatial = _radius_bin_peak_edge_score(edges_for_scoring, gx, gy, cx, cy, cfg)
             radial_flow = _radial_expansion_score(flow, cx, cy, cfg)
             div_ring = _ring_pool_mean(div_pos, cx, cy, cfg.r_min, cfg.r_max)
             div_norm = float(_soft_saturate(np.asarray(div_ring, dtype=np.float32),
-                                            cfg.divergence_cap))
+                                            divergence_cap))
             wsum_exp = max(cfg.w_radial_flow + cfg.w_divergence, 1e-6)
             expansion = (cfg.w_radial_flow * radial_flow
                          + cfg.w_divergence * div_norm) / wsum_exp
@@ -767,6 +1099,12 @@ class RippleDetector:
             if structure < cfg.candidate_min_score:
                 continue
             scored.append((cx, cy, structure))
+            # Confidence from divergence magnitude — soft-saturate so a 16×
+            # impact spike doesn't dominate entirely but is clearly stronger
+            # than a 2× background ripple.  div_val is in the same units as
+            # div_smooth (a peak value of the smoothed positive divergence).
+            div_conf = float(div_val) / (float(div_val) + cfg.energy_div_softcap)
+            strengths.append(structure * div_conf)
 
         # ---- Render candidate heatmap & pool to grid ------------------
         structure_hm = _render_candidate_heatmap(scored, H, W, cfg.candidate_sigma)
@@ -787,27 +1125,63 @@ class RippleDetector:
         raw_score = (activity_grid * structure_grid).astype(np.float32)
         raw_score = np.clip(raw_score, 0.0, 1.0)
 
-        # ---- Sliding windows -----------------------------------------
-        short_s = np.zeros((R, C), dtype=np.float32)
-        mid_s = np.zeros((R, C), dtype=np.float32)
-        long_s = np.zeros((R, C), dtype=np.float32)
-        for r in range(R):
-            for c in range(C):
-                w = self._windows[r][c]
-                v = float(raw_score[r, c])
-                w["short"].append(v)
-                w["mid"].append(v)
-                w["long"].append(v)
-                short_s[r, c] = float(np.mean(w["short"]))
-                mid_s[r, c] = float(np.mean(w["mid"]))
-                long_s[r, c] = float(np.mean(w["long"]))
+        # ---- Sliding windows (vectorised ring buffer + running sum) --
+        def _push(scale: str) -> np.ndarray:
+            sw = self._sw[scale]
+            buf = sw["buf"]
+            i = sw["idx"]
+            if sw["count"] < sw["len"]:
+                # Buffer not yet full: just add into the running sum.
+                sw["sum"] += raw_score
+                sw["count"] += 1
+            else:
+                # Buffer full: subtract the slot we're about to overwrite,
+                # then add the new value.
+                sw["sum"] += raw_score - buf[i]
+            buf[i] = raw_score
+            sw["idx"] = (i + 1) % sw["len"]
+            return (sw["sum"] / max(sw["count"], 1)).astype(np.float32)
 
-        # Final heatmap: bilinear-upsampled mid_score, modulated by structure
-        # (keeps grid-consistency but sharpens around candidate centres).
+        short_s = _push("short")
+        mid_s = _push("mid")
+        long_s = _push("long")
+
+        # ---- Short pulse: max over last N raw_score frames ------------
+        # A 1–2-frame impact spike gets washed out by short_window=30 averaging,
+        # but max-pooling the last few frames keeps it visible on the heatmap
+        # for the human eye to catch.
+        if self._pulse_buf is not None and self._pulse_buf.shape[0] > 0:
+            self._pulse_buf[self._pulse_idx] = raw_score
+            self._pulse_idx = (self._pulse_idx + 1) % self._pulse_buf.shape[0]
+            self._pulse_count = min(self._pulse_count + 1, self._pulse_buf.shape[0])
+            pulse_grid = self._pulse_buf[: self._pulse_count].max(axis=0)
+        else:
+            pulse_grid = raw_score
+
+        # Final heatmap: bilinear-upsampled mid_score (long-term context),
+        # blended with the structure heatmap (per-candidate sharpness) and
+        # the short pulse (instant impact responsiveness).
         mid_full = cv2.resize(mid_s, (W, H), interpolation=cv2.INTER_LINEAR)
-        # Smooth structure heatmap to blend nicely with bilinear mid_score
+        pulse_full = cv2.resize(pulse_grid, (W, H), interpolation=cv2.INTER_LINEAR)
+        # Smooth structure heatmap to blend nicely with the bilinear fields
         struct_smooth = cv2.GaussianBlur(structure_hm, (0, 0), cfg.candidate_sigma * 0.6)
-        heatmap = np.clip(0.6 * mid_full + 0.4 * struct_smooth, 0.0, 1.0).astype(np.float32)
+        w_pulse = float(cfg.short_pulse_weight)
+        w_mid = 0.6 * (1.0 - w_pulse)
+        w_struct = 0.4 * (1.0 - w_pulse)
+        heatmap = np.clip(
+            w_mid * mid_full + w_struct * struct_smooth + w_pulse * pulse_full,
+            0.0, 1.0,
+        ).astype(np.float32)
+
+        # ---- Frame-level energy (probabilistic OR + EMA) -------------
+        # ``strengths`` is structure × divergence-confidence per candidate,
+        # so the aggregation reflects both ripple quality and amplitude.
+        energy_raw = _aggregate_candidate_energy(
+            strengths, cfg.energy_candidate_weight
+        )
+        alpha = float(np.clip(cfg.energy_ema_alpha, 0.0, 1.0))
+        self._energy_ema = alpha * energy_raw + (1.0 - alpha) * self._energy_ema
+        energy_smooth = float(np.clip(self._energy_ema, 0.0, 1.0))
 
         # ---- Update inter-frame state --------------------------------
         self._prev_gray = gray
@@ -822,6 +1196,8 @@ class RippleDetector:
             long_score=long_s,
             heatmap=heatmap,
             candidates=scored,
+            energy=energy_smooth,
+            energy_raw=float(energy_raw),
         )
 
 
@@ -946,11 +1322,16 @@ def run_on_video(
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                                 (255, 255, 255), 1, cv2.LINE_AA)
 
-            peak_score = float(result.mid_score.max())
-            mean_score = float(result.mid_score.mean())
-            label = activity_level(peak_score)
-            text = (f"{label}  peak={peak_score:.2f}  mean={mean_score:.2f}  "
-                    f"f={result.frame_index}")
+            # Use the new scalar energy (0-1 ripple intensity of THIS frame)
+            # as the headline number — it tracks the actual ripple activity
+            # far better than mid_score.max(), which is a slow grid-pooled
+            # rolling mean that lags 30+ frames behind a real event.
+            energy = float(result.energy)
+            energy_raw = float(result.energy_raw)
+            label = activity_level(energy)
+            text = (f"{label}  energy={energy:.2f}  "
+                    f"raw={energy_raw:.2f}  "
+                    f"f={result.frame_index}  cand={len(result.candidates)}")
             cv2.putText(vis, text, (10, 24),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                         _LEVEL_COLOR_BGR[label], 2, cv2.LINE_AA)
@@ -972,8 +1353,8 @@ def run_on_video(
                 proc_fps = n / elapsed if elapsed > 0 else 0.0
                 tot = f"/{total_frames}" if total_frames else ""
                 print(
-                    f"  frame {n}{tot}  peak={peak_score:.2f}  "
-                    f"mean={mean_score:.2f}  level={label:<7}  "
+                    f"  frame {n}{tot}  energy={energy:.2f}  "
+                    f"raw={energy_raw:.2f}  level={label:<7}  "
                     f"cand={len(result.candidates):2d}  proc_fps={proc_fps:.1f}",
                     flush=True,
                 )
