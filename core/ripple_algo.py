@@ -233,9 +233,27 @@ class RippleAlgoConfig:
     # clearly outscore a passive ripple (div ~1.5) at the *same* structure
     # quality — the missing axis in the v4.2 energy.
     energy_div_softcap: float = 3.0
-    # Temporal smoothing (EMA) of the per-frame energy: 0.0 = no smoothing
-    # (raw spikes), 1.0 = frozen.  α controls how fast new evidence flows
-    # in; 0.5 reaches 75% in 2 frames, 0.3 in 5 frames.
+
+    # Asymmetric EMA (attack–release envelope) on the per-frame energy.
+    # The water-droplet event "should look like" a bell curve — fast rise,
+    # slow decay — but raw candidate detection is jittery (1-frame misses
+    # are common during the splash and fading aftermath).  An envelope
+    # follower with attack >> release smooths over those single-frame dips
+    # without lagging behind real onsets:
+    #
+    #     if energy_raw > energy_ema:   # rising
+    #         energy_ema = α_attack * energy_raw + (1-α_attack) * energy_ema
+    #     else:                         # falling
+    #         energy_ema = α_release * energy_raw + (1-α_release) * energy_ema
+    #
+    # Defaults at 30 fps:
+    #   attack=0.6  → 75% in ~2 frames (event onsets feel instant)
+    #   release=0.15 → 75% in ~8 frames (~0.3 s decay tail)
+    # Set both to the same value for plain symmetric EMA.  Set both to 0
+    # to fall back to the legacy ``energy_ema_alpha`` (single rate).
+    energy_attack_alpha: float = 0.6
+    energy_release_alpha: float = 0.15
+    # Legacy single-rate EMA — used only when both attack and release are 0.
     energy_ema_alpha: float = 0.5
 
     # -- Soft saturation caps (replace v1 hard caps) ----------------------
@@ -1173,13 +1191,23 @@ class RippleDetector:
             0.0, 1.0,
         ).astype(np.float32)
 
-        # ---- Frame-level energy (probabilistic OR + EMA) -------------
+        # ---- Frame-level energy (probabilistic OR + envelope) --------
         # ``strengths`` is structure × divergence-confidence per candidate,
         # so the aggregation reflects both ripple quality and amplitude.
         energy_raw = _aggregate_candidate_energy(
             strengths, cfg.energy_candidate_weight
         )
-        alpha = float(np.clip(cfg.energy_ema_alpha, 0.0, 1.0))
+        # Asymmetric EMA: attack fast (real onset visible right away),
+        # release slow (smoothly fades through single-frame detection
+        # misses).  Result: a bell-curve envelope that matches the
+        # physical intuition of a ripple — fast rise, slow decay.
+        a_atk = float(np.clip(cfg.energy_attack_alpha, 0.0, 1.0))
+        a_rel = float(np.clip(cfg.energy_release_alpha, 0.0, 1.0))
+        if a_atk <= 0.0 and a_rel <= 0.0:
+            # Legacy single-rate fallback
+            alpha = float(np.clip(cfg.energy_ema_alpha, 0.0, 1.0))
+        else:
+            alpha = a_atk if energy_raw > self._energy_ema else a_rel
         self._energy_ema = alpha * energy_raw + (1.0 - alpha) * self._energy_ema
         energy_smooth = float(np.clip(self._energy_ema, 0.0, 1.0))
 
