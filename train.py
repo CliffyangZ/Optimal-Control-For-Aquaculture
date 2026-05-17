@@ -97,6 +97,8 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
 
 def _cmd_infer(args: argparse.Namespace) -> int:
     from core.infer.detector import YOLODetector
+    import json as _json
+    import cv2
 
     model_path = Path(args.model)
     if not model_path.exists():
@@ -109,14 +111,33 @@ def _cmd_infer(args: argparse.Namespace) -> int:
         conf_threshold=args.conf,
     )
 
-    import json as _json
-    import cv2
-
     source = args.source
     cap = cv2.VideoCapture(source if source.startswith("rtsp") else str(source))
     if not cap.isOpened():
         print(f"[infer] ERROR: cannot open source: {source}", file=sys.stderr)
         return 1
+
+    # Get video properties
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+
+    # Setup video writer if output path provided
+    writer = None
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+        print(f"[infer] Writing output to: {output_path}", flush=True)
+
+    # Class colors for visualization
+    colors = {
+        "fish": (0, 255, 0),      # Green
+        "feed": (255, 0, 0),      # Blue
+        "debris": (0, 165, 255),  # Orange
+        "lumpfish": (128, 0, 128) # Purple
+    }
 
     frame_id = 0
     try:
@@ -126,7 +147,21 @@ def _cmd_infer(args: argparse.Namespace) -> int:
                 break
             frame_id += 1
             result = detector.detect(frame)
+
+            # Draw detections on frame
             for det in result.detections:
+                x1 = int(det.bbox_x * width)
+                y1 = int(det.bbox_y * height)
+                x2 = int((det.bbox_x + det.bbox_w) * width)
+                y2 = int((det.bbox_y + det.bbox_h) * height)
+
+                color = colors.get(det.class_name, (255, 255, 255))
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+                label = f"{det.class_name} {det.confidence:.2f}"
+                cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                # Output JSON detection
                 print(
                     _json.dumps({
                         "frame_id": frame_id,
@@ -139,11 +174,21 @@ def _cmd_infer(args: argparse.Namespace) -> int:
                     }),
                     flush=True,
                 )
+
+            # Write frame to output video
+            if writer:
+                writer.write(frame)
+
             # For image files, stop after first frame
             if not source.startswith("rtsp") and not str(source).endswith((".mp4", ".avi", ".mov")):
                 break
+
+        if writer:
+            print(f"[infer] Output video complete: {args.output}", flush=True)
     finally:
         cap.release()
+        if writer:
+            writer.release()
     return 0
 
 
@@ -206,6 +251,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_in = sub.add_parser("infer", help="Run YOLO26 inference on image/video/RTSP")
     p_in.add_argument("--model", type=Path, required=True, help="Path to .pt weights file")
     p_in.add_argument("--source", type=str, required=True, help="Image path, video path, or RTSP URL")
+    p_in.add_argument("--output", type=str, default=None, help="Output video path (optional; if not provided, only JSON output)")
     p_in.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
     p_in.add_argument("--device", type=str, default="cuda", help="Inference device (cuda/cpu/0)")
     p_in.set_defaults(func=_cmd_infer)
