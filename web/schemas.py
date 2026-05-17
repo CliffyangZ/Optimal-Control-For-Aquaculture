@@ -25,6 +25,8 @@ class SessionStatusResponse(BaseModel):
     last_frame_at: Optional[str] = None
     last_overlay_at: Optional[str] = None
     detection_fps: float = 0.0
+    # Returned only by POST /session/start; null on all other endpoints.
+    viewer_id: Optional[str] = None
     message: Optional[str] = None
 
 
@@ -57,6 +59,15 @@ class ActivityPayload(BaseModel):
     level: str
     score: int
     confidence: float
+    # Smoothed (EMA) and raw (per-frame) ripple energy in [0.0, 1.0]. The
+    # `score` field above is a 0–100 integer projection of `energy` kept for
+    # backward compatibility with the existing badge UI; the chart in the
+    # frontend plots `energy` and `energy_raw` directly.
+    energy: float = 0.0
+    energy_raw: float = 0.0
+    # Detector-internal frame index (monotonically increasing). Useful for
+    # debugging chart gaps / frame drops on the client.
+    frame_index: int = 0
 
 
 class RegionPayload(BaseModel):
@@ -65,6 +76,9 @@ class RegionPayload(BaseModel):
     y: float = Field(ge=0.0, le=1.0)
     width: float = Field(ge=0.0, le=1.0)
     height: float = Field(ge=0.0, le=1.0)
+    # Candidate structure score in [0, 1] — drives ring size / opacity on the
+    # frontend energy-centre overlay.
+    score: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class OverlayMessage(BaseModel):

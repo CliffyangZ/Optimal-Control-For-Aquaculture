@@ -160,6 +160,16 @@ class RippleAlgoConfig:
     # noticeable accuracy loss for handheld / mounted cameras.  Set to 1 to
     # estimate every frame, 0 to disable caching entirely.
     homography_stride: int = 2
+    # If the max element deviation of the estimated homography from identity
+    # is below this value, skip the warp entirely.
+    # Why: on a static/fixed camera, KLT finds codec-noise "motion" and RANSAC
+    # fits a near-identity H (sub-pixel shift). Applying even a 0.3-pixel warp
+    # to a CLAHE-enhanced frame creates bilinear-interpolation artefacts at
+    # every high-contrast edge — DIS then interprets these as real optical flow,
+    # producing persistent fake divergence peaks and non-zero energy on static
+    # scenes.  A deviation ≤ 0.5 corresponds to ≈ 0.5-pixel max shift: not
+    # worth warping.  Set to 0 to disable the check.
+    homography_identity_skip: float = 0.5
 
     # -- Divergence peak detection -----------------------------------------
     div_peak_sigma: float = 8.0             # smoothing σ before peak search
@@ -255,10 +265,28 @@ class RippleAlgoConfig:
     energy_release_alpha: float = 0.15
     # Legacy single-rate EMA — used only when both attack and release are 0.
     energy_ema_alpha: float = 0.5
+    # Minimum energy_raw level considered non-noise.  Values below this are
+    # clamped to 0.0 before the EMA update and before reporting — stops the
+    # EMA from sustaining a non-zero baseline when candidates exist but their
+    # combined strength is below the perceptible noise floor.  Set to 0 to
+    # disable.
+    energy_noise_floor: float = 0.03
 
     # -- Soft saturation caps (replace v1 hard caps) ----------------------
     motion_cap: float = 0.03
     edge_cap: float = 0.03
+
+    # -- Static-frame gate ------------------------------------------------
+    # If the fraction of pixels whose |diff| exceeds diff_threshold stays
+    # below this floor we declare the frame "essentially static" and zero
+    # out candidates so codec noise doesn't leak into the energy signal.
+    # Uses motion_mask.mean() (raw pixel-change fraction) rather than
+    # activity_grid.mean() — the latter is inflated by bg_soft_floor=0.30
+    # and can be 0.03–0.05 even on a completely motionless codec stream,
+    # making the 0.002 threshold permanently inactive for real sources.
+    # Rule of thumb: H.264 static scene ≈ 0.001–0.003; gentle ripples ≥ 0.005.
+    # Set to 0 to disable.
+    static_frame_activity_gate: float = 0.003
 
     # -- Grid --------------------------------------------------------------
     grid_rows: int = 8
@@ -1015,6 +1043,17 @@ class RippleDetector:
             else:
                 homo = self._homo_cache
 
+        # Skip near-identity warps: on a fixed/static camera KLT finds codec-
+        # noise "motion" and RANSAC fits a sub-pixel homography.  Applying even
+        # a 0.3-pixel warp to a CLAHE-enhanced frame creates bilinear artefacts
+        # at every high-contrast edge that DIS misreads as real optical flow,
+        # producing persistent divergence peaks and spurious energy on still
+        # scenes.  Threshold 0.5 ≈ max 0.5-pixel equivalent shift.
+        if homo is not None and cfg.homography_identity_skip > 0:
+            _dev = float(np.abs(homo - np.eye(3, dtype=np.float32)).max())
+            if _dev < cfg.homography_identity_skip:
+                homo = None
+
         if homo is not None:
             prev_aligned = cv2.warpPerspective(self._prev_gray, homo, (W, H))
             prev_edges_aligned = cv2.warpPerspective(
@@ -1139,6 +1178,26 @@ class RippleDetector:
         wsum = max(cfg.w_motion + cfg.w_edge, 1e-6)
         activity_grid /= wsum
 
+        # ---- Static-frame gate: suppress candidates on still images ------
+        # Codec noise can produce tiny divergence peaks even when nothing
+        # moves.  Gate on the raw pixel-change fraction (motion_mask.mean())
+        # rather than activity_grid.mean(): the latter is inflated by
+        # bg_soft_floor so a typical H.264 static stream gives ~0.03–0.05,
+        # making any threshold < 0.02 permanently inactive for real sources.
+        # motion_mask.mean() has no floor bias — static codec frames give
+        # ~0.001–0.003; real ripple activity gives ≥0.005.
+        if cfg.static_frame_activity_gate > 0:
+            if float(motion_mask.mean()) < cfg.static_frame_activity_gate:
+                candidates = []
+                scored = []
+                strengths = []
+                # Also zero the structure maps so static noise doesn't
+                # accumulate into the sliding-window scores / heatmap.
+                structure_hm = np.zeros((H, W), dtype=np.float32)
+                structure_grid = np.zeros(
+                    (cfg.grid_rows, cfg.grid_cols), dtype=np.float32
+                )
+
         # ---- Gated fusion --------------------------------------------
         raw_score = (activity_grid * structure_grid).astype(np.float32)
         raw_score = np.clip(raw_score, 0.0, 1.0)
@@ -1197,6 +1256,12 @@ class RippleDetector:
         energy_raw = _aggregate_candidate_energy(
             strengths, cfg.energy_candidate_weight
         )
+        # Clamp sub-noise-floor energy to zero before the EMA so that weak
+        # codec-noise candidates don't sustain a non-zero baseline.  The same
+        # clamped value is reported so the frontend chart also shows clean zeros.
+        if cfg.energy_noise_floor > 0 and energy_raw < cfg.energy_noise_floor:
+            energy_raw = 0.0
+
         # Asymmetric EMA: attack fast (real onset visible right away),
         # release slow (smoothly fades through single-frame detection
         # misses).  Result: a bell-curve envelope that matches the
@@ -1209,6 +1274,11 @@ class RippleDetector:
         else:
             alpha = a_atk if energy_raw > self._energy_ema else a_rel
         self._energy_ema = alpha * energy_raw + (1.0 - alpha) * self._energy_ema
+        # Snap to zero below a perceptually-invisible floor so the EMA
+        # doesn't asymptote at a tiny non-zero value when there is no
+        # real activity — avoids permanent "idle-but-not-zero" baseline.
+        if self._energy_ema < 1e-4:
+            self._energy_ema = 0.0
         energy_smooth = float(np.clip(self._energy_ema, 0.0, 1.0))
 
         # ---- Update inter-frame state --------------------------------

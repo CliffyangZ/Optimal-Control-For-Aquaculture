@@ -74,7 +74,10 @@ def _build_config(request: Request) -> RuntimeConfigResponse:
     )
 
 
-def _session_to_response(message: Optional[str] = None) -> SessionStatusResponse:
+def _session_to_response(
+    viewer_id: Optional[str] = None,
+    message: Optional[str] = None,
+) -> SessionStatusResponse:
     session = detection_worker.get_session_snapshot()
     if session is None:
         return SessionStatusResponse(
@@ -82,6 +85,7 @@ def _session_to_response(message: Optional[str] = None) -> SessionStatusResponse
             stream_status=StreamStatus.WAITING,
             detection_status=DetectionHealthStatus.UNAVAILABLE,
             active_viewer_count=0,
+            viewer_id=viewer_id,
             message=message,
         )
     return SessionStatusResponse(
@@ -93,6 +97,7 @@ def _session_to_response(message: Optional[str] = None) -> SessionStatusResponse
         last_frame_at=session.last_frame_at.isoformat() if session.last_frame_at else None,
         last_overlay_at=session.last_overlay_at.isoformat() if session.last_overlay_at else None,
         detection_fps=session.detection_fps,
+        viewer_id=viewer_id,
         message=message,
     )
 
@@ -109,7 +114,7 @@ async def start_session() -> SessionStatusResponse:
     from uuid import uuid4
     viewer_id = str(uuid4())
     await detection_worker.register_viewer(viewer_id)
-    return _session_to_response(message=f"viewer_id:{viewer_id}")
+    return _session_to_response(viewer_id=viewer_id)
 
 
 @app.post("/session/stop", response_model=SessionStatusResponse)
@@ -147,8 +152,10 @@ async def ws_overlays(websocket: WebSocket) -> None:
 
             if msg_type == "viewer.hello":
                 viewer_id = data.get("viewer_id", "")
-                overlay_enabled = data.get("overlay_enabled", True)
-                await detection_worker.register_viewer(viewer_id, overlay_enabled)
+                # The viewer was already registered via POST /session/start.
+                # Just subscribe to the overlay hub for this WS connection;
+                # calling register_viewer again would reset the heartbeat timer
+                # and re-run session-start logic unnecessarily.
                 queue = overlay_hub.subscribe(viewer_id)
                 push_task = asyncio.create_task(
                     _push_overlays(websocket, queue, viewer_id)

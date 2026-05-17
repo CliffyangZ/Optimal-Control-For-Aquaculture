@@ -1,48 +1,162 @@
-"""Shared detection worker lifecycle for one configured stream."""
+"""Shared detection worker lifecycle for one configured stream.
+
+Bridges the new spatiotemporal ripple detector (`core.ripple_algo.RippleDetector`)
+with the FastAPI / WebSocket overlay layer. Each frame produced by
+`LatestFrameReader` is fed to `RippleDetector.process()`, and the resulting
+`ActivityResult` is converted into an `OverlayMessage` containing:
+
+  * The headline `activity` badge (level, integer score, confidence, raw and
+    smoothed energy) so the frontend energy chart can plot it in real time.
+  * A list of normalized candidate `regions` derived from the detector's
+    candidate ripple centres, for the SVG overlay layer.
+"""
+
+from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
 from config.setting import (
+    IDLE_SHUTDOWN_DELAY_SECONDS,
     SOURCE_ID,
     STREAM_URL,
     TARGET_DETECTION_FPS,
     VIEWER_HEARTBEAT_TIMEOUT_SECONDS,
-    IDLE_SHUTDOWN_DELAY_SECONDS,
-    STALE_OVERLAY_MS,
 )
 from core.models import (
+    ActivityBadge,
     DetectionHealthStatus,
-    DetectionStatus,
     LiveStreamSession,
     StreamStatus,
     VideoFrame,
     ViewerSession,
     ViewerState,
-    ActivityBadge,
-    ActivityRegion,
-    DetectionOverlayPayload,
 )
+from core.ripple_algo import ActivityResult, RippleAlgoConfig, RippleDetector, activity_level
 from core.stream_health import derive_detection_status, derive_stream_status
 from streaming.latest_frame_reader import LatestFrameReader
-from core.ripple_detector import RippleDetector
 from web.overlay_hub import overlay_hub
-from web.schemas import OverlayMessage, RegionPayload, ActivityPayload, StatusMessage
+from web.schemas import (
+    ActivityPayload,
+    OverlayMessage,
+    RegionPayload,
+    StatusMessage,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# Map the new 5-level vocabulary from `core.ripple_algo.activity_level` to
+# the 3-level vocabulary expected by the frontend's existing ActivityBadge.
+_LEVEL_TO_BADGE: dict[str, str] = {
+    "idle": "Low",
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "intense": "High",
+}
+
+
+def _badge_level(energy_label: str) -> str:
+    return _LEVEL_TO_BADGE.get(energy_label, "Low")
+
+
+def _candidate_radius_px(cfg: RippleAlgoConfig) -> int:
+    """Visual bounding-box half-size around each ripple candidate centre."""
+    return max(8, int(round(cfg.candidate_sigma * 1.5)))
+
+
+def _candidates_to_regions(
+    result: ActivityResult,
+    cfg: RippleAlgoConfig,
+    source_width: int,
+    source_height: int,
+) -> list[RegionPayload]:
+    """Convert ripple candidate centres into normalized overlay regions.
+
+    Candidates (cx, cy) are in the detector's internal pixel space, which may
+    differ from source_width × source_height when cfg.input_scale != 1.0.
+    We normalise against the actual processed dimensions (result.heatmap.shape)
+    so the [0, 1] coordinates are always correct regardless of input_scale.
+    source_width / source_height are kept in the signature for compatibility but
+    are no longer used for normalisation.
+    """
+    if not result.candidates:
+        return []
+
+    half = _candidate_radius_px(cfg)
+    # Use the actual processed-frame dimensions, not the pre-scale source dims.
+    det_h, det_w = result.heatmap.shape[:2]
+    sw = max(1, det_w)
+    sh = max(1, det_h)
+    regions: list[RegionPayload] = []
+    for i, (cx, cy, score) in enumerate(result.candidates):
+        if score <= 0.0:
+            continue
+        x0 = max(0, cx - half)
+        y0 = max(0, cy - half)
+        x1 = min(sw, cx + half)
+        y1 = min(sh, cy + half)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        regions.append(
+            RegionPayload(
+                id=f"candidate-{i + 1}",
+                x=x0 / sw,
+                y=y0 / sh,
+                width=(x1 - x0) / sw,
+                height=(y1 - y0) / sh,
+                score=float(min(1.0, max(0.0, score))),
+            )
+        )
+    return regions
+
+
+def _activity_payload(
+    result: ActivityResult,
+    cfg: RippleAlgoConfig,
+) -> ActivityPayload:
+    """Build the headline activity payload from the latest ActivityResult.
+
+    `score` is the smoothed energy mapped to the legacy 0–100 integer scale so
+    existing frontend widgets keep working; `energy` carries the original
+    0.0–1.0 value for the time-series chart.
+    """
+    energy = float(max(0.0, min(1.0, result.energy)))
+    energy_raw = float(max(0.0, min(1.0, result.energy_raw)))
+    score = int(round(energy * 100))
+    # Confidence proxy: how strongly the detector "committed" this frame.
+    # When energy_raw is much lower than energy_ema we are still in the
+    # release tail (decaying) — slightly lower confidence; when raw > ema we
+    # are on a rising edge — high confidence.
+    if energy <= 0.0:
+        confidence = 0.0
+    else:
+        ratio = energy_raw / max(energy, 1e-6)
+        confidence = float(max(0.0, min(1.0, 0.5 + 0.5 * math.tanh(ratio - 0.5))))
+    return ActivityPayload(
+        level=_badge_level(activity_level(energy)),
+        score=score,
+        confidence=confidence,
+        energy=energy,
+        energy_raw=energy_raw,
+        frame_index=int(result.frame_index),
+    )
 
 
 class DetectionWorker:
     """Single shared detection loop for the configured stream.
 
     Lifecycle:
-    - Starts when the first viewer joins via register_viewer().
-    - Runs detection at TARGET_DETECTION_FPS and broadcasts overlays via overlay_hub.
-    - Stops within IDLE_SHUTDOWN_DELAY_SECONDS after active_viewer_count reaches 0.
+      * Starts when the first viewer joins via `register_viewer()`.
+      * Runs at TARGET_DETECTION_FPS, broadcasting overlays through `overlay_hub`.
+      * Idles down when `active_viewer_count` stays at 0 for
+        `IDLE_SHUTDOWN_DELAY_SECONDS`.
     """
 
     def __init__(self) -> None:
@@ -51,9 +165,21 @@ class DetectionWorker:
         self._lock = asyncio.Lock()
         self._worker_task: Optional[asyncio.Task] = None
         self._frame_reader: Optional[LatestFrameReader] = None
-        self._detector = RippleDetector()
+        # New spatiotemporal detector. We keep a single configured instance for
+        # the worker's lifetime so its sliding windows and tracker state remain
+        # warm across frames.
+        self._cfg = RippleAlgoConfig()
+        self._detector = RippleDetector(self._cfg)
         self._frame_counter = 0
         self._detection_times: list[float] = []
+        self._last_processed_seq: int = -1
+        # Wall-clock time of the most recently processed frame. A large gap
+        # (> _STREAM_GAP_RESET_S) indicates the RTSP source restarted and the
+        # detector's inter-frame state (prev_gray, tracked centres, EMA) would
+        # compare the new first frame against the old last frame, producing a
+        # spurious energy spike. Resetting on gap avoids this artefact.
+        self._last_processed_frame_at: Optional[datetime] = None
+        self._STREAM_GAP_RESET_S: float = 3.0
 
     # --- Public API ---
 
@@ -61,7 +187,9 @@ class DetectionWorker:
     def session(self) -> Optional[LiveStreamSession]:
         return self._session
 
-    async def register_viewer(self, viewer_id: str, overlay_enabled: bool = True) -> LiveStreamSession:
+    async def register_viewer(
+        self, viewer_id: str, overlay_enabled: bool = True
+    ) -> LiveStreamSession:
         async with self._lock:
             now = datetime.now(timezone.utc)
             viewer = ViewerSession(
@@ -81,11 +209,21 @@ class DetectionWorker:
                     stream_status=StreamStatus.CONNECTING,
                     detection_status=DetectionHealthStatus.UNAVAILABLE,
                 )
+                # Reset detector state so per-session sliding windows start
+                # from a clean slate (otherwise mid/long scores carry state
+                # from the previous session).
+                self._detector.reset()
+                self._frame_counter = 0
+                self._detection_times.clear()
+                self._last_processed_seq = -1
+                self._last_processed_frame_at = None
                 self._start_worker()
             self._session.active_viewer_count = len(self._active_viewers())
             return self._session
 
-    async def unregister_viewer(self, viewer_id: str) -> Optional[LiveStreamSession]:
+    async def unregister_viewer(
+        self, viewer_id: str
+    ) -> Optional[LiveStreamSession]:
         async with self._lock:
             viewer = self._viewers.pop(viewer_id, None)
             if viewer:
@@ -106,7 +244,12 @@ class DetectionWorker:
     # --- Internal helpers ---
 
     def _active_viewers(self) -> list[ViewerSession]:
-        return [v for v in self._viewers.values() if v.state in (ViewerState.ACTIVE, ViewerState.CONNECTING, ViewerState.RECONNECTING)]
+        return [
+            v
+            for v in self._viewers.values()
+            if v.state
+            in (ViewerState.ACTIVE, ViewerState.CONNECTING, ViewerState.RECONNECTING)
+        ]
 
     def _start_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -116,37 +259,45 @@ class DetectionWorker:
 
     async def _run(self) -> None:
         logger.info("detection_worker: started for source=%s", SOURCE_ID)
-        detection_interval = 1.0 / TARGET_DETECTION_FPS if TARGET_DETECTION_FPS > 0 else 0.1
+        detection_interval = (
+            1.0 / TARGET_DETECTION_FPS if TARGET_DETECTION_FPS > 0 else 0.1
+        )
         idle_since: Optional[float] = None
 
         try:
             while True:
                 loop_start = time.monotonic()
 
-                # Check if we should idle-shutdown
+                # Idle-shutdown when there are no active viewers for too long.
                 active = self._active_viewers()
                 if not active:
                     if idle_since is None:
                         idle_since = time.monotonic()
                     elif time.monotonic() - idle_since >= IDLE_SHUTDOWN_DELAY_SECONDS:
-                        logger.info("detection_worker: no active viewers; shutting down")
+                        logger.info(
+                            "detection_worker: no active viewers; shutting down"
+                        )
                         break
                 else:
                     idle_since = None
 
-                # Heartbeat timeout cleanup
+                # Heartbeat timeout cleanup.
                 now = datetime.now(timezone.utc)
                 async with self._lock:
                     for viewer_id, v in list(self._viewers.items()):
                         age = (now - v.last_heartbeat_at).total_seconds()
                         if age > VIEWER_HEARTBEAT_TIMEOUT_SECONDS:
-                            logger.info("detection_worker: heartbeat timeout viewer=%s", viewer_id)
+                            logger.info(
+                                "detection_worker: heartbeat timeout viewer=%s",
+                                viewer_id,
+                            )
                             v.state = ViewerState.TIMED_OUT
                             self._viewers.pop(viewer_id, None)
                     if self._session:
-                        self._session.active_viewer_count = len(self._active_viewers())
+                        self._session.active_viewer_count = len(
+                            self._active_viewers()
+                        )
 
-                # Get latest frame from reader
                 if self._frame_reader is None:
                     await asyncio.sleep(detection_interval)
                     continue
@@ -165,8 +316,20 @@ class DetectionWorker:
                 if raw_frame is None:
                     await self._broadcast_status()
                     elapsed = time.monotonic() - loop_start
-                    await asyncio.sleep(max(0, detection_interval - elapsed))
+                    await asyncio.sleep(max(0.0, detection_interval - elapsed))
                     continue
+
+                # Skip duplicate frames: when RTSP delivers slower than the
+                # detection rate, get_latest_frame() returns the same frame on
+                # consecutive ticks. Processing the same image twice makes the
+                # detector compute diff=0 on tick N+1, gate fires → energy=0,
+                # then diff≠0 on tick N+2 → energy spikes back. This produces
+                # the "jittery idle" artefact on static / slow-stream scenes.
+                if raw_frame.sequence_number == self._last_processed_seq:
+                    elapsed = time.monotonic() - loop_start
+                    await asyncio.sleep(max(0.0, detection_interval - elapsed))
+                    continue
+                self._last_processed_seq = raw_frame.sequence_number
 
                 self._frame_counter += 1
                 video_frame = VideoFrame(
@@ -177,10 +340,33 @@ class DetectionWorker:
                     image=raw_frame.image,
                 )
 
-                # Run detection (synchronous; offload to thread executor to avoid blocking event loop)
+                # Reset detector when the RTSP source restarts. A large gap
+                # between successive processed frames means LatestFrameReader
+                # reconnected: the detector would otherwise compare the new
+                # first frame against the stale last frame and generate a
+                # spurious energy spike (scene-change artefact).
+                if (
+                    self._last_processed_frame_at is not None
+                    and video_frame.captured_at is not None
+                ):
+                    gap = (
+                        video_frame.captured_at - self._last_processed_frame_at
+                    ).total_seconds()
+                    if gap > self._STREAM_GAP_RESET_S:
+                        logger.info(
+                            "detection_worker: %.1fs frame gap — resetting detector",
+                            gap,
+                        )
+                        self._detector.reset()
+                self._last_processed_frame_at = video_frame.captured_at
+
+                # Run detection off the event loop — OpenCV work is heavy and
+                # synchronous.
                 loop = asyncio.get_event_loop()
                 t0 = time.monotonic()
-                result = await loop.run_in_executor(None, self._detector.detect, raw_frame)
+                result = await loop.run_in_executor(
+                    None, self._detector.process, video_frame.image
+                )
                 detection_time = time.monotonic() - t0
                 self._detection_times.append(detection_time)
                 if len(self._detection_times) > 30:
@@ -190,8 +376,14 @@ class DetectionWorker:
 
                 if self._session:
                     self._session.last_overlay_at = datetime.now(timezone.utc)
-                    avg_dt = sum(self._detection_times) / len(self._detection_times) if self._detection_times else 0
-                    self._session.detection_fps = round(1.0 / avg_dt, 1) if avg_dt > 0 else 0.0
+                    avg_dt = (
+                        sum(self._detection_times) / len(self._detection_times)
+                        if self._detection_times
+                        else 0.0
+                    )
+                    self._session.detection_fps = (
+                        round(1.0 / avg_dt, 1) if avg_dt > 0 else 0.0
+                    )
                     self._session.detection_status = derive_detection_status(
                         last_overlay_at=self._session.last_overlay_at,
                         last_frame_at=last_frame_time,
@@ -200,7 +392,7 @@ class DetectionWorker:
                 await self._broadcast_overlay(video_frame, result, now_ms)
 
                 elapsed = time.monotonic() - loop_start
-                await asyncio.sleep(max(0, detection_interval - elapsed))
+                await asyncio.sleep(max(0.0, detection_interval - elapsed))
 
         except asyncio.CancelledError:
             logger.info("detection_worker: cancelled")
@@ -209,32 +401,31 @@ class DetectionWorker:
         finally:
             await self._shutdown()
 
-    async def _broadcast_overlay(self, frame: VideoFrame, result, now_ms: int) -> None:
+    async def _broadcast_overlay(
+        self,
+        frame: VideoFrame,
+        result: Optional[ActivityResult],
+        now_ms: int,
+    ) -> None:
         if self._session is None:
             return
 
         regions: list[RegionPayload] = []
         activity: Optional[ActivityPayload] = None
-
-        if result.status == DetectionStatus.AVAILABLE and result.visual_marker:
-            marker = result.visual_marker
-            sw, sh = frame.source_width, frame.source_height
-            for i, r in enumerate(marker.get("mark_regions", [])):
-                x = max(0.0, min(1.0, r["x"] / sw))
-                y = max(0.0, min(1.0, r["y"] / sh))
-                w = max(0.0, min(1.0 - x, r["width"] / sw))
-                h = max(0.0, min(1.0 - y, r["height"] / sh))
-                regions.append(RegionPayload(id=f"region-{i+1}", x=x, y=y, width=w, height=h))
-            if result.activity_level and result.activity_score is not None and result.confidence is not None:
-                activity = ActivityPayload(
-                    level=result.activity_level.value,
-                    score=result.activity_score,
-                    confidence=result.confidence,
-                )
-
+        message: Optional[str] = None
         det_status = self._session.detection_status
-        if result.status == DetectionStatus.UNAVAILABLE:
+
+        if result is None:
+            # The detector returns None on the very first frame (it needs a
+            # previous frame to compute temporal features). Treat that as a
+            # transient "warming up" state.
             det_status = DetectionHealthStatus.UNAVAILABLE
+            message = "Detection warming up"
+        else:
+            regions = _candidates_to_regions(
+                result, self._cfg, frame.source_width, frame.source_height
+            )
+            activity = _activity_payload(result, self._cfg)
 
         msg = OverlayMessage(
             schema="overlay.v1",
@@ -247,7 +438,7 @@ class DetectionWorker:
             detection_status=det_status,
             activity=activity,
             regions=regions,
-            message=result.reason if result.status == DetectionStatus.UNAVAILABLE else None,
+            message=message,
         )
         overlay_hub.broadcast(msg.to_ws_dict())
 
