@@ -1,0 +1,10 @@
+workspace: jtelectric
+project: fishtracker_v2
+version: 1
+format: yolov8
+nc: 4
+names:
+  - fish
+  - feed
+  - debris
+  - lumpfish
