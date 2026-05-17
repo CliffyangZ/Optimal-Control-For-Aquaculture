@@ -3,6 +3,8 @@
 Subcommands:
     download   Download FishTracker_v2 from Roboflow and generate 5-fold splits
     train      Train YOLO26s across folds with wandb logging
+    evaluate   Aggregate cross-fold metrics and apply the quality gate
+    infer      Run inference on an image, video, or RTSP stream
 """
 
 from __future__ import annotations
@@ -36,6 +38,112 @@ def _cmd_download(args: argparse.Namespace) -> int:
         f"[download] 5-fold splits generated: {fold_yamls[0].parent} "
         f"({len(fold_yamls)} fold YAML configs)"
     )
+    return 0
+
+
+def _cmd_evaluate(args: argparse.Namespace) -> int:
+    from core.train.evaluator import CrossFoldEvaluator
+
+    config = load_training_config(args.config)
+    # Use --runs-dir if provided, otherwise derive from config.model.output_dir
+    if args.runs_dir is not None:
+        runs_dir = Path(args.runs_dir)
+    else:
+        runs_dir = Path(config.model.output_dir)
+
+    # Discover fold best.pt paths: runs_dir/fold-{k}_*/weights/best.pt
+    best_pts: dict[int, Path] = {}
+    for weights_dir in sorted(runs_dir.glob("fold-*/weights")):
+        run_name = weights_dir.parent.name  # fold-0_20260517_1430
+        try:
+            k = int(run_name.split("-")[1].split("_")[0])
+        except (IndexError, ValueError):
+            continue
+        bp = weights_dir / "best.pt"
+        if bp.exists():
+            best_pts[k] = bp
+
+    if not best_pts:
+        print(
+            f"[evaluate] ERROR: no fold checkpoints found in {runs_dir}. "
+            f"Run `python train.py train` first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    evaluator = CrossFoldEvaluator(config.evaluation)
+    fold_metrics_list = []
+
+    # Determine fold YAML paths
+    fold_output_dir = Path(config.dataset.fold_output_dir)
+    for k in sorted(best_pts):
+        model_path = best_pts[k]
+        val_yaml = fold_output_dir / f"fold_{k}.yaml"
+        if not val_yaml.exists():
+            print(
+                f"[evaluate] WARNING: fold YAML not found: {val_yaml}; skipping fold {k}",
+                file=sys.stderr,
+            )
+            continue
+        print(f"[evaluate] Evaluating fold {k} — {model_path}", flush=True)
+        fm = evaluator.evaluate_fold(k, model_path, val_yaml)
+        fold_metrics_list.append(fm)
+
+    report = evaluator.aggregate(fold_metrics_list)
+    report_path = runs_dir.parent / "cv_report.json"
+    evaluator.write_report(report, report_path)
+    return 0
+
+
+def _cmd_infer(args: argparse.Namespace) -> int:
+    from core.infer.detector import YOLODetector
+
+    model_path = Path(args.model)
+    if not model_path.exists():
+        print(f"[infer] ERROR: model file not found: {model_path}", file=sys.stderr)
+        return 1
+
+    detector = YOLODetector.load(
+        model_path,
+        device=args.device,
+        conf_threshold=args.conf,
+    )
+
+    import json as _json
+    import cv2
+
+    source = args.source
+    cap = cv2.VideoCapture(source if source.startswith("rtsp") else str(source))
+    if not cap.isOpened():
+        print(f"[infer] ERROR: cannot open source: {source}", file=sys.stderr)
+        return 1
+
+    frame_id = 0
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame_id += 1
+            result = detector.detect(frame)
+            for det in result.detections:
+                print(
+                    _json.dumps({
+                        "frame_id": frame_id,
+                        "class_name": det.class_name,
+                        "confidence": round(det.confidence, 4),
+                        "x": round(det.bbox_x, 4),
+                        "y": round(det.bbox_y, 4),
+                        "width": round(det.bbox_w, 4),
+                        "height": round(det.bbox_h, 4),
+                    }),
+                    flush=True,
+                )
+            # For image files, stop after first frame
+            if not source.startswith("rtsp") and not str(source).endswith((".mp4", ".avi", ".mov")):
+                break
+    finally:
+        cap.release()
     return 0
 
 
@@ -89,6 +197,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-wandb", action="store_true", help="Disable wandb logging entirely"
     )
     p_tr.set_defaults(func=_cmd_train)
+
+    p_ev = sub.add_parser("evaluate", help="Aggregate cross-fold metrics + quality gate")
+    p_ev.add_argument("--config", type=Path, default=Path("config/training.yaml"))
+    p_ev.add_argument("--runs-dir", type=Path, default=None, help="Override output directory (default: from config)")
+    p_ev.set_defaults(func=_cmd_evaluate)
+
+    p_in = sub.add_parser("infer", help="Run YOLO26 inference on image/video/RTSP")
+    p_in.add_argument("--model", type=Path, required=True, help="Path to .pt weights file")
+    p_in.add_argument("--source", type=str, required=True, help="Image path, video path, or RTSP URL")
+    p_in.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
+    p_in.add_argument("--device", type=str, default="cuda", help="Inference device (cuda/cpu/0)")
+    p_in.set_defaults(func=_cmd_infer)
 
     return parser
 
