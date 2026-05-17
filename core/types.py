@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 
 
-CLASS_NAMES: tuple[str, ...] = ("fish", "feed", "debris", "lumpfish")
+CLASS_NAMES: tuple[str, ...] = ("debris", "feed", "fish", "lumpfish")
 CLASS_INDEX: dict[str, int] = {name: i for i, name in enumerate(CLASS_NAMES)}
 
 

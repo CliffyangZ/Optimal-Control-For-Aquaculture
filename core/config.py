@@ -28,6 +28,7 @@ class DatasetConfig:
 class ModelConfig:
     weights: str
     variant: str
+    output_dir: str
     epochs: int
     batch: int
     imgsz: int
@@ -111,6 +112,7 @@ def load_training_config(
     model = ModelConfig(
         weights=m["weights"],
         variant=m["variant"],
+        output_dir=m.get("output_dir", "runs/train"),
         epochs=int(m["epochs"]),
         batch=int(m["batch"]),
         imgsz=int(m["imgsz"]),

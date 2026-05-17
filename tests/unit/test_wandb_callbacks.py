@@ -18,13 +18,25 @@ from typing import Any
 import pytest
 
 from core.config import WandbConfig
-from core.train.callbacks import make_val_image_logger, setup_wandb_mode
+from core.train.callbacks import (
+    make_val_image_logger,
+    make_wandb_metrics_logger,
+    setup_wandb_mode,
+)
 
 
 @dataclass
 class _FakeTrainer:
     epoch: int
     save_dir: Path
+    metrics: dict[str, object] | None = None
+    tloss: object | None = None
+    lr: dict[str, object] | None = None
+
+    def label_loss_items(self, loss_items: object, prefix: str = "train") -> dict[str, object]:
+        if isinstance(loss_items, dict):
+            return {f"{prefix}/{key}": value for key, value in loss_items.items()}
+        return {f"{prefix}/loss": loss_items}
 
 
 class _FakeImage:
@@ -48,7 +60,11 @@ def _install_fake_wandb(monkeypatch: pytest.MonkeyPatch, *, run: _FakeRun | None
             raise RuntimeError("simulated wandb unreachable")
         return True
 
+    def _require(_: str) -> None:
+        return None
+
     fake.login = _login  # type: ignore[attr-defined]
+    fake.require = _require  # type: ignore[attr-defined]
     fake.Image = _FakeImage  # type: ignore[attr-defined]
     fake.run = run  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "wandb", fake)
@@ -114,6 +130,35 @@ def test_val_image_logger_noop_when_no_images(tmp_path: Path, monkeypatch: pytes
     assert run.logged == []
 
 
+def test_wandb_metrics_logger_logs_scalar_metrics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _FakeRun()
+    _install_fake_wandb(monkeypatch, run=run)
+
+    cb = make_wandb_metrics_logger()
+    cb(
+        _FakeTrainer(
+            epoch=2,
+            save_dir=tmp_path,
+            metrics={"metrics/mAP50(B)": 0.75, "ignored": "not numeric"},
+            tloss={"box_loss": 1.2, "cls_loss": 0.4},
+            lr={"lr/pg0": 0.001},
+        )
+    )
+
+    assert run.logged == [
+        (
+            {
+                "epoch": 3,
+                "train/box_loss": 1.2,
+                "train/cls_loss": 0.4,
+                "metrics/mAP50(B)": 0.75,
+                "lr/pg0": 0.001,
+            },
+            3,
+        )
+    ]
+
+
 def test_setup_wandb_mode_disabled_sets_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WANDB_MODE", raising=False)
     cfg = WandbConfig(project="p", entity="", log_val_images_every_n=10)
@@ -126,6 +171,7 @@ def test_setup_wandb_mode_disabled_sets_env(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_setup_wandb_mode_offline_on_login_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WANDB_MODE", raising=False)
+    monkeypatch.delenv("WANDB_PROJECT", raising=False)
     _install_fake_wandb(monkeypatch, run=None, login_raises=True)
 
     cfg = WandbConfig(project="p", entity="my-team", log_val_images_every_n=10)
@@ -134,14 +180,20 @@ def test_setup_wandb_mode_offline_on_login_failure(monkeypatch: pytest.MonkeyPat
     import os
 
     assert os.environ.get("WANDB_MODE") == "offline"
+    assert os.environ.get("WANDB_PROJECT") == "p"
     # Entity should have been propagated to env from config.
     assert os.environ.get("WANDB_ENTITY") == "my-team"
 
 
 def test_setup_wandb_mode_online_when_login_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("WANDB_MODE", raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.delenv("WANDB_PROJECT", raising=False)
     _install_fake_wandb(monkeypatch, run=None, login_raises=False)
 
     cfg = WandbConfig(project="p", entity="", log_val_images_every_n=10)
     mode = setup_wandb_mode(cfg, disabled=False)
     assert mode == "online"
+    import os
+
+    assert os.environ.get("WANDB_MODE") == "online"
+    assert os.environ.get("WANDB_PROJECT") == "p"

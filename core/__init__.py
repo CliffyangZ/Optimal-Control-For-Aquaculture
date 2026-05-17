@@ -1,1 +1,1 @@
-"""Core module for ripple detection and activity analysis."""
+"""Core module for YOLO26 fish/feed detection pipeline."""

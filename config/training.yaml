@@ -10,6 +10,7 @@ dataset:
 model:
   weights: yolo26s.pt
   variant: yolo26s
+  output_dir: runs/train
   epochs: 100
   batch: 8
   imgsz: 640

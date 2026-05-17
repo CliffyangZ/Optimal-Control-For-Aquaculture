@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core.config import TrainingConfig
-from core.train.callbacks import make_val_image_logger
+from core.train.callbacks import make_val_image_logger, make_wandb_metrics_logger
 
 
 log = logging.getLogger(__name__)
@@ -35,6 +35,55 @@ class FoldTrainer:
     def _wandb_disabled(self) -> bool:
         return os.environ.get("WANDB_MODE", "").lower() == "disabled"
 
+    def _start_wandb_run(self, k: int, run_name: str) -> tuple[object | None, bool]:
+        """Start a fold-scoped wandb run before Ultralytics training begins."""
+        if self._wandb_disabled():
+            return None, False
+
+        try:
+            import wandb
+        except ImportError:
+            print("[wandb] package not installed; skipping wandb logging", flush=True)
+            return None, False
+
+        active_run = getattr(wandb, "run", None)
+        if active_run:
+            return active_run, False
+
+        run = wandb.init(
+            project=self.config.wandb.project,
+            entity=self.config.wandb.entity or None,
+            name=run_name,
+            tags=["train", f"fold-{k}"],
+            config={
+                "fold": k,
+                "weights": self.config.model.weights,
+                "variant": self.config.model.variant,
+                "epochs": self.config.model.epochs,
+                "batch": self.config.model.batch,
+                "imgsz": self.config.model.imgsz,
+                "seed": self.config.model.seed,
+                "dataset": "FishTracker_v2",
+            },
+        )
+        try:
+            wandb.define_metric("epoch")
+            wandb.define_metric("*", step_metric="epoch")
+        except Exception:  # noqa: BLE001 - keep training running if wandb chart setup fails
+            log.debug("Unable to define wandb epoch metric", exc_info=True)
+        return run, True
+
+    def _finish_wandb_run(self, run: object | None, should_finish: bool) -> None:
+        """Finish only the run this trainer explicitly started."""
+        if run is None or not should_finish:
+            return
+        try:
+            import wandb
+        except ImportError:
+            return
+        if getattr(wandb, "run", None) is run:
+            wandb.finish()
+
     def train_fold(self, k: int, fold_yaml: Path) -> Path:
         """Train one fold and return its Ultralytics `save_dir`."""
         from ultralytics import YOLO  # local import: ml group only
@@ -43,37 +92,42 @@ class FoldTrainer:
         run_name = f"fold-{k}_{timestamp}"
         print(f"[train] Starting fold {k}/{self.config.dataset.n_folds} → wandb run: {run_name}")
 
-        model = YOLO(self.config.model.weights)
-        model.add_callback(
-            "on_fit_epoch_end",
-            make_val_image_logger(self.config.wandb.log_val_images_every_n),
-        )
+        wandb_run, should_finish_wandb = self._start_wandb_run(k, run_name)
+        try:
+            model = YOLO(self.config.model.weights)
+            model.add_callback("on_fit_epoch_end", make_wandb_metrics_logger())
+            model.add_callback(
+                "on_fit_epoch_end",
+                make_val_image_logger(self.config.wandb.log_val_images_every_n),
+            )
 
-        results = model.train(
-            data=str(fold_yaml),
-            project=self.config.wandb.project,
-            name=run_name,
-            epochs=self.config.model.epochs,
-            batch=self.config.model.batch,
-            imgsz=self.config.model.imgsz,
-            workers=self.config.model.workers,
-            mosaic=self.config.model.mosaic,
-            close_mosaic=self.config.model.close_mosaic,
-            mixup=self.config.model.mixup,
-            patience=self.config.model.patience,
-            seed=self.config.model.seed,
-        )
+            results = model.train(
+                data=str(fold_yaml),
+                project=str(self.project_root / self.config.model.output_dir),
+                name=run_name,
+                epochs=self.config.model.epochs,
+                batch=self.config.model.batch,
+                imgsz=self.config.model.imgsz,
+                workers=self.config.model.workers,
+                mosaic=self.config.model.mosaic,
+                close_mosaic=self.config.model.close_mosaic,
+                mixup=self.config.model.mixup,
+                patience=self.config.model.patience,
+                seed=self.config.model.seed,
+            )
 
-        save_dir = Path(getattr(results, "save_dir", None) or getattr(model.trainer, "save_dir"))
-        best_pt = save_dir / "weights" / "best.pt"
+            save_dir = Path(getattr(results, "save_dir", None) or getattr(model.trainer, "save_dir"))
+            best_pt = save_dir / "weights" / "best.pt"
 
-        print(
-            f"[train] Fold {k} complete: best.pt → {best_pt}"
-            + (f"  (wandb run: {run_name})" if not self._wandb_disabled() else "")
-        )
+            print(
+                f"[train] Fold {k} complete: best.pt → {best_pt}"
+                + (f"  (wandb run: {run_name})" if not self._wandb_disabled() else "")
+            )
 
-        self.upload_fold_artifact(k, save_dir)
-        return save_dir
+            self.upload_fold_artifact(k, save_dir)
+            return save_dir
+        finally:
+            self._finish_wandb_run(wandb_run, should_finish_wandb)
 
     def upload_fold_artifact(self, k: int, save_dir: Path) -> None:
         """Log `best.pt` as a fold-tagged wandb artifact (skipped if wandb disabled)."""

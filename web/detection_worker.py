@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -17,21 +18,17 @@ from config.setting import (
 )
 from core.models import (
     DetectionHealthStatus,
-    DetectionStatus,
     LiveStreamSession,
     StreamStatus,
     VideoFrame,
     ViewerSession,
     ViewerState,
-    ActivityBadge,
-    ActivityRegion,
-    DetectionOverlayPayload,
 )
 from core.stream_health import derive_detection_status, derive_stream_status
+from core.types import DetectionResult
 from streaming.latest_frame_reader import LatestFrameReader
-from core.ripple_detector import RippleDetector
 from web.overlay_hub import overlay_hub
-from web.schemas import OverlayMessage, RegionPayload, ActivityPayload, StatusMessage
+from web.schemas import DetectionsMessage, DetectionPayload, StatusMessage
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +38,7 @@ class DetectionWorker:
 
     Lifecycle:
     - Starts when the first viewer joins via register_viewer().
-    - Runs detection at TARGET_DETECTION_FPS and broadcasts overlays via overlay_hub.
+    - Runs detection at TARGET_DETECTION_FPS and broadcasts detections.v1 over overlay_hub.
     - Stops within IDLE_SHUTDOWN_DELAY_SECONDS after active_viewer_count reaches 0.
     """
 
@@ -51,7 +48,7 @@ class DetectionWorker:
         self._lock = asyncio.Lock()
         self._worker_task: Optional[asyncio.Task] = None
         self._frame_reader: Optional[LatestFrameReader] = None
-        self._detector = RippleDetector()
+        self._detector = None  # YOLODetector; loaded lazily in _start_worker
         self._frame_counter = 0
         self._detection_times: list[float] = []
 
@@ -112,6 +109,16 @@ class DetectionWorker:
         if self._worker_task is None or self._worker_task.done():
             self._frame_reader = LatestFrameReader(STREAM_URL)
             self._frame_reader.start()
+            # Load YOLODetector if a model path is configured
+            model_path = os.environ.get("YOLO_MODEL_PATH", "")
+            if model_path and self._detector is None:
+                try:
+                    from core.infer.detector import YOLODetector
+                    device = os.environ.get("YOLO_DEVICE", "cpu")
+                    self._detector = YOLODetector.load(model_path, device=device)
+                    logger.info("detection_worker: loaded YOLODetector from %s on %s", model_path, device)
+                except Exception:
+                    logger.exception("detection_worker: failed to load YOLODetector; running without detector")
             self._worker_task = asyncio.create_task(self._run())
 
     async def _run(self) -> None:
@@ -177,10 +184,20 @@ class DetectionWorker:
                     image=raw_frame.image,
                 )
 
-                # Run detection (synchronous; offload to thread executor to avoid blocking event loop)
+                if self._detector is None:
+                    await self._broadcast_status()
+                    elapsed = time.monotonic() - loop_start
+                    await asyncio.sleep(max(0, detection_interval - elapsed))
+                    continue
+
+                # Run YOLO inference (offload to thread executor to avoid blocking event loop)
                 loop = asyncio.get_event_loop()
                 t0 = time.monotonic()
-                result = await loop.run_in_executor(None, self._detector.detect, raw_frame)
+                result: DetectionResult = await loop.run_in_executor(
+                    None, self._detector.detect, raw_frame.image
+                )
+                result.frame_id = video_frame.frame_id
+                result.captured_at = video_frame.captured_at
                 detection_time = time.monotonic() - t0
                 self._detection_times.append(detection_time)
                 if len(self._detection_times) > 30:
@@ -209,45 +226,32 @@ class DetectionWorker:
         finally:
             await self._shutdown()
 
-    async def _broadcast_overlay(self, frame: VideoFrame, result, now_ms: int) -> None:
+    async def _broadcast_overlay(self, frame: VideoFrame, result: DetectionResult, now_ms: int) -> None:
         if self._session is None:
             return
 
-        regions: list[RegionPayload] = []
-        activity: Optional[ActivityPayload] = None
+        detection_payloads = [
+            DetectionPayload(
+                class_name=d.class_name,
+                confidence=d.confidence,
+                x=d.bbox_x,
+                y=d.bbox_y,
+                width=d.bbox_w,
+                height=d.bbox_h,
+            )
+            for d in result.detections
+        ]
 
-        if result.status == DetectionStatus.AVAILABLE and result.visual_marker:
-            marker = result.visual_marker
-            sw, sh = frame.source_width, frame.source_height
-            for i, r in enumerate(marker.get("mark_regions", [])):
-                x = max(0.0, min(1.0, r["x"] / sw))
-                y = max(0.0, min(1.0, r["y"] / sh))
-                w = max(0.0, min(1.0 - x, r["width"] / sw))
-                h = max(0.0, min(1.0 - y, r["height"] / sh))
-                regions.append(RegionPayload(id=f"region-{i+1}", x=x, y=y, width=w, height=h))
-            if result.activity_level and result.activity_score is not None and result.confidence is not None:
-                activity = ActivityPayload(
-                    level=result.activity_level.value,
-                    score=result.activity_score,
-                    confidence=result.confidence,
-                )
-
-        det_status = self._session.detection_status
-        if result.status == DetectionStatus.UNAVAILABLE:
-            det_status = DetectionHealthStatus.UNAVAILABLE
-
-        msg = OverlayMessage(
-            schema="overlay.v1",
+        msg = DetectionsMessage(
+            schema="detections.v1",
             source_id=self._session.source_id,
             frame_id=frame.frame_id,
             timestamp_ms=now_ms,
             source_width=frame.source_width,
             source_height=frame.source_height,
             stream_status=self._session.stream_status,
-            detection_status=det_status,
-            activity=activity,
-            regions=regions,
-            message=result.reason if result.status == DetectionStatus.UNAVAILABLE else None,
+            detection_status=self._session.detection_status,
+            detections=detection_payloads,
         )
         overlay_hub.broadcast(msg.to_ws_dict())
 

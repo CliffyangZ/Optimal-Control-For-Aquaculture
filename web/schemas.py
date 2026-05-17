@@ -1,7 +1,7 @@
 """FastAPI response and WebSocket payload schemas."""
 
 from __future__ import annotations
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 from core.models import StreamStatus, DetectionHealthStatus
@@ -80,6 +80,36 @@ class OverlayMessage(BaseModel):
     activity: Optional[ActivityPayload] = None
     regions: list[RegionPayload] = Field(default_factory=list)
     message: Optional[str] = None
+
+    model_config = {"populate_by_name": True}
+
+    def to_ws_dict(self) -> dict:
+        d = self.model_dump(by_alias=True)
+        d["stream_status"] = self.stream_status.value
+        d["detection_status"] = self.detection_status.value
+        return d
+
+
+class DetectionPayload(BaseModel):
+    class_name: Literal["fish", "feed", "debris", "lumpfish"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+    width: float = Field(ge=0.0, le=1.0)
+    height: float = Field(ge=0.0, le=1.0)
+
+
+class DetectionsMessage(BaseModel):
+    schema_: str = Field("detections.v1", alias="schema")
+    type: str = "detections"
+    source_id: str
+    frame_id: int
+    timestamp_ms: int
+    source_width: int
+    source_height: int
+    stream_status: StreamStatus
+    detection_status: DetectionHealthStatus
+    detections: list[DetectionPayload] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
 
