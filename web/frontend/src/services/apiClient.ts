@@ -15,12 +15,9 @@ export async function getConfig(): Promise<RuntimeConfig> {
 }
 
 export async function startSession(): Promise<SessionStatus & { viewer_id: string }> {
-  const status = await fetchJson<SessionStatus>('/session/start', { method: 'POST' })
-  // viewer_id is encoded in message field as "viewer_id:<uuid>"
-  const viewer_id = status.message?.startsWith('viewer_id:')
-    ? status.message.slice('viewer_id:'.length)
-    : ''
-  return { ...status, viewer_id }
+  const raw = await fetchJson<SessionStatus & { viewer_id?: string }>('/session/start', { method: 'POST' })
+  const viewer_id = raw.viewer_id ?? ''
+  return { ...raw, viewer_id }
 }
 
 export async function stopSession(viewer_id?: string): Promise<SessionStatus> {

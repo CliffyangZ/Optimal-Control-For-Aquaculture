@@ -6,6 +6,7 @@ import { useWebRtcPlayer } from './hooks/useWebRtcPlayer'
 import { useOverlaySocket } from './hooks/useOverlaySocket'
 import { OverlayLayer } from './components/OverlayLayer'
 import { DetectionPanel } from './components/DetectionPanel'
+import { EnergyChart } from './components/EnergyChart'
 import { getConfig, startSession, stopSession, getStatus } from './services/apiClient'
 import type { RuntimeConfig, SessionStatus, StreamStatus, DetectionStatus } from './types/streaming'
 
@@ -18,6 +19,9 @@ export default function App() {
   const [isMonitoring, setIsMonitoring] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [overlayEnabled, setOverlayEnabled] = useState(true)
+  // Incremented every time a new monitoring session starts/stops so the
+  // EnergyChart can flush its sample buffer instead of bridging unrelated runs.
+  const [sessionEpoch, setSessionEpoch] = useState(0)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -76,6 +80,7 @@ export default function App() {
       setViewerId(s.viewer_id || null)
       setSession(s)
       setIsMonitoring(true)
+      setSessionEpoch((e) => e + 1)
     } catch (err) {
       console.error('start session failed', err)
     } finally {
@@ -92,6 +97,7 @@ export default function App() {
     } catch { /* ignore */ }
     setViewerId(null)
     setSession(null)
+    setSessionEpoch((e) => e + 1)
   }, [viewerId, stopRtc])
 
   const handleToggleOverlay = useCallback(() => {
@@ -136,6 +142,11 @@ export default function App() {
           {latestOverlay?.activity && (
             <DetectionPanel overlay={latestOverlay} staleMs={config?.stale_overlay_ms ?? 500} />
           )}
+          <EnergyChart
+            overlay={latestOverlay}
+            staleMs={config?.stale_overlay_ms ?? 500}
+            resetKey={sessionEpoch}
+          />
         </aside>
       </main>
     </div>

@@ -283,7 +283,15 @@ body {
   padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+.detection-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .detection-panel__title {
@@ -291,20 +299,204 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--color-text-muted);
+  margin: 0;
 }
 
-.detection-panel__badge {
-  font-size: 1.1rem;
+/* ---- Energy Meter ---- */
+
+.energy-meter__level-badge {
+  font-size: 0.65rem;
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 99px;
 }
 
-.detection-panel__badge--low { color: var(--color-success); }
-.detection-panel__badge--medium { color: var(--color-warn); }
-.detection-panel__badge--high { color: var(--color-danger); }
+.energy-meter__level-badge--idle   { background: #1f2937; color: var(--color-text-muted); }
+.energy-meter__level-badge--low    { background: #14532d; color: var(--color-success); }
+.energy-meter__level-badge--medium { background: #431407; color: var(--color-warn); }
+.energy-meter__level-badge--high   { background: #4a1a06; color: #fdba74; }
+.energy-meter__level-badge--intense{ background: #450a0a; color: var(--color-danger); }
 
-.detection-panel__score {
-  font-size: 0.85rem;
+.energy-meter__value {
+  font-size: 2rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  transition: color 0.3s ease;
+}
+
+.energy-meter__value--idle    { color: var(--color-text-muted); }
+.energy-meter__value--low     { color: var(--color-success); }
+.energy-meter__value--medium  { color: var(--color-warn); }
+.energy-meter__value--high    { color: #fdba74; }
+.energy-meter__value--intense { color: var(--color-danger); }
+
+.energy-meter__value-raw {
+  font-size: 0.7rem;
+  font-weight: 400;
   color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Progress bar */
+.energy-meter__bar-track {
+  position: relative;
+  height: 8px;
+  background: var(--color-border);
+  border-radius: 4px;
+  overflow: visible;
+}
+
+.energy-meter__bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.15s ease-out, background-color 0.3s ease;
+  min-width: 2px;
+}
+
+.energy-meter__bar-fill--idle    { background: #374151; }
+.energy-meter__bar-fill--low     { background: var(--color-success); }
+.energy-meter__bar-fill--medium  { background: var(--color-warn); }
+.energy-meter__bar-fill--high    { background: #fdba74; }
+.energy-meter__bar-fill--intense { background: var(--color-danger); }
+
+.energy-meter__bar-fill--pulse {
+  animation: bar-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes bar-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.65; }
+}
+
+/* Threshold tick marks on the bar */
+.energy-meter__marker {
+  position: absolute;
+  top: -3px;
+  width: 1px;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.15);
+  pointer-events: none;
+}
+
+/* Pulse ring — shown when energy ≥ 0.15 */
+.energy-meter__pulse-ring {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  animation: pulse-ring 1.6s ease-out infinite;
+}
+
+.energy-meter__pulse-ring--low     { background: var(--color-success); }
+.energy-meter__pulse-ring--medium  { background: var(--color-warn); }
+.energy-meter__pulse-ring--high    { background: #fdba74; }
+.energy-meter__pulse-ring--intense { background: var(--color-danger); }
+
+@keyframes pulse-ring {
+  0%   { transform: scale(0.8); opacity: 1; }
+  70%  { transform: scale(1.8); opacity: 0; }
+  100% { transform: scale(0.8); opacity: 0; }
+}
+
+/* ---- Energy Chart ---- */
+
+.energy-chart {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.energy-chart__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.energy-chart__title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.energy-chart__badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
+.energy-chart__badge--idle {
+  background: #1f2937;
+  color: var(--color-text-muted);
+}
+
+.energy-chart__badge--low {
+  background: #14532d;
+  color: var(--color-success);
+}
+
+.energy-chart__badge--medium {
+  background: #431407;
+  color: var(--color-warn);
+}
+
+.energy-chart__badge--high {
+  background: #4a1a06;
+  color: #fdba74;
+}
+
+.energy-chart__badge--intense {
+  background: #450a0a;
+  color: var(--color-danger);
+}
+
+.energy-chart__badge--no-data {
+  background: var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.energy-chart__canvas {
+  display: block;
+  width: 100%;
+  height: 140px;
+  border-radius: 4px;
+  background: #0f1117;
+}
+
+.energy-chart__readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: baseline;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.energy-chart__readout strong {
+  color: var(--color-text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.energy-chart__samples {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- Overlay SVG ---- */
@@ -315,17 +507,5 @@ body {
   width: 100%;
   height: 100%;
   pointer-events: none;
-}
-
-.overlay-region {
-  fill: none;
-  stroke: #38bdf8;
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-}
-
-.overlay-region-label {
-  fill: #38bdf8;
-  font-size: 12px;
-  font-family: system-ui, sans-serif;
+  /* SVG SMIL animations handle all motion; no CSS animations needed here */
 }

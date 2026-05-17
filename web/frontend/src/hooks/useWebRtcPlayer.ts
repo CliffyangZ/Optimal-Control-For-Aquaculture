@@ -26,6 +26,8 @@ interface UseWebRtcPlayerResult {
 
 const RECONNECT_DELAY_MS = 3000
 const MAX_RECONNECT_DELAY_MS = 30000
+// Interval between currentTime checks; must stall for this duration to trigger reconnect.
+const VIDEO_STALL_CHECK_MS = 4000
 
 export function useWebRtcPlayer({
   whepUrl,
@@ -40,8 +42,13 @@ export function useWebRtcPlayer({
   const stoppedRef = useRef(false)
   const reconnectDelayRef = useRef(RECONNECT_DELAY_MS)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const stallTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const cleanup = useCallback(() => {
+    if (stallTimerRef.current) {
+      clearInterval(stallTimerRef.current)
+      stallTimerRef.current = null
+    }
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current)
       reconnectTimerRef.current = null
@@ -77,6 +84,35 @@ export function useWebRtcPlayer({
           videoRef.current.play().catch(() => {/* autoplay policy */})
           setState('live')
           reconnectDelayRef.current = RECONNECT_DELAY_MS
+
+          // Monitor video.currentTime to detect a frozen/stalled stream.
+          // WebRTC connections can stay "connected" at the ICE level while the
+          // video track stops delivering frames (jitter-buffer underrun, RTSP
+          // source reconnect, etc.). Checking currentTime every VIDEO_STALL_CHECK_MS
+          // catches this without relying on onconnectionstatechange alone.
+          if (stallTimerRef.current) clearInterval(stallTimerRef.current)
+          let lastCurrentTime = -1
+          stallTimerRef.current = setInterval(() => {
+            const video = videoRef.current
+            if (!video || stoppedRef.current) return
+            const cur = video.currentTime
+            // Skip check until playback has actually started
+            if (lastCurrentTime < 0) {
+              if (cur > 0) lastCurrentTime = cur
+              return
+            }
+            if (cur === lastCurrentTime && !video.paused) {
+              if (stallTimerRef.current) {
+                clearInterval(stallTimerRef.current)
+                stallTimerRef.current = null
+              }
+              if (!stoppedRef.current) {
+                setState('reconnecting')
+                scheduleReconnect()
+              }
+            }
+            lastCurrentTime = cur
+          }, VIDEO_STALL_CHECK_MS)
         }
       }
 

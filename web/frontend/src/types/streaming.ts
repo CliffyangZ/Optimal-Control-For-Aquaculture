@@ -28,6 +28,8 @@ export interface SessionStatus {
   last_frame_at: string | null
   last_overlay_at: string | null
   detection_fps: number
+  /** Populated only on POST /session/start; null on all other endpoints. */
+  viewer_id?: string | null
   message: string | null
 }
 
@@ -35,6 +37,12 @@ export interface ActivityBadge {
   level: ActivityLevel
   score: number
   confidence: number
+  /** Smoothed (EMA) ripple energy in [0, 1] — primary chart signal. */
+  energy?: number
+  /** Per-frame raw energy in [0, 1], no smoothing — secondary chart signal. */
+  energy_raw?: number
+  /** Detector-internal frame index, monotonically increasing. */
+  frame_index?: number
 }
 
 export interface OverlayRegion {
@@ -43,6 +51,8 @@ export interface OverlayRegion {
   y: number
   width: number
   height: number
+  /** Candidate structure score in [0, 1] from the ripple detector. */
+  score?: number
 }
 
 export interface OverlayMessage {
