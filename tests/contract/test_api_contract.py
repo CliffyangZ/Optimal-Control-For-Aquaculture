@@ -6,7 +6,9 @@ import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 
+from config.setting import MEDIAMTX_HOST
 from web.app import app
+from web.app import LOOPBACK_MEDIAMTX_HOSTS
 
 
 @pytest_asyncio.fixture
@@ -40,7 +42,8 @@ async def test_config_webrtc_url_contains_source_id(client):
 async def test_config_webrtc_url_uses_browser_visible_host_for_loopback_mediamtx(client):
     r = await client.get("/config", headers={"host": "192.168.10.12:8000"})
     body = r.json()
-    assert urlparse(body["webrtc_url"]).hostname == "192.168.10.12"
+    expected_host = "192.168.10.12" if MEDIAMTX_HOST in LOOPBACK_MEDIAMTX_HOSTS else MEDIAMTX_HOST
+    assert urlparse(body["webrtc_url"]).hostname == expected_host
 
 
 @pytest.mark.asyncio

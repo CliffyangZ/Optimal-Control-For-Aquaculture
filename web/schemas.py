@@ -53,42 +53,6 @@ class ViewerStopMessage(BaseModel):
 
 # --- WebSocket server message schemas ---
 
-class ActivityPayload(BaseModel):
-    level: str
-    score: int
-    confidence: float
-
-
-class RegionPayload(BaseModel):
-    id: str
-    x: float = Field(ge=0.0, le=1.0)
-    y: float = Field(ge=0.0, le=1.0)
-    width: float = Field(ge=0.0, le=1.0)
-    height: float = Field(ge=0.0, le=1.0)
-
-
-class OverlayMessage(BaseModel):
-    schema_: str = Field("overlay.v1", alias="schema")
-    type: str = "overlay"
-    source_id: str
-    frame_id: int
-    timestamp_ms: int
-    source_width: int
-    source_height: int
-    stream_status: StreamStatus
-    detection_status: DetectionHealthStatus
-    activity: Optional[ActivityPayload] = None
-    regions: list[RegionPayload] = Field(default_factory=list)
-    message: Optional[str] = None
-
-    model_config = {"populate_by_name": True}
-
-    def to_ws_dict(self) -> dict:
-        d = self.model_dump(by_alias=True)
-        d["stream_status"] = self.stream_status.value
-        d["detection_status"] = self.detection_status.value
-        return d
-
 
 class DetectionPayload(BaseModel):
     class_name: Literal["fish", "feed", "debris", "lumpfish"]
@@ -110,6 +74,7 @@ class DetectionsMessage(BaseModel):
     stream_status: StreamStatus
     detection_status: DetectionHealthStatus
     detections: list[DetectionPayload] = Field(default_factory=list)
+    message: Optional[str] = None
 
     model_config = {"populate_by_name": True}
 

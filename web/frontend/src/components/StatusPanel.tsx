@@ -16,12 +16,13 @@ const STREAM_LABELS: Record<StreamStatus, string> = {
   reconnecting: 'Reconnecting…',
   stream_unavailable: 'Stream Unavailable',
   degraded: 'Degraded',
+  error: 'Error',
 }
 
 const DETECTION_LABELS: Record<DetectionStatus, string> = {
-  ok: 'OK',
-  delayed: 'Delayed',
-  degraded: 'Degraded',
+  loading: 'Loading',
+  active: 'Active',
+  stale: 'Stale',
   unavailable: 'Unavailable',
 }
 
@@ -54,7 +55,7 @@ export function StatusPanel({
       </div>
       {rtcState === 'reconnecting' && (
         <div className="status-message status-message--warn">
-          Video reconnecting — stream may be temporarily unavailable.
+          Video reconnecting; stream may be temporarily unavailable.
         </div>
       )}
       {rtcError && (rtcState === 'error' || rtcState === 'reconnecting') && (
@@ -62,9 +63,9 @@ export function StatusPanel({
           Playback error: {rtcError}
         </div>
       )}
-      {detectionStatus === 'delayed' && (
+      {detectionStatus === 'stale' && (
         <div className="status-message status-message--info">
-          Detection delayed; live video remains active.
+          Detection stale; live video remains active.
         </div>
       )}
       {detectionStatus === 'unavailable' && streamStatus === 'live' && (

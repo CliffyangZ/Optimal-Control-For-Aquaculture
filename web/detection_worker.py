@@ -15,6 +15,10 @@ from config.setting import (
     VIEWER_HEARTBEAT_TIMEOUT_SECONDS,
     IDLE_SHUTDOWN_DELAY_SECONDS,
     STALE_OVERLAY_MS,
+    YOLO_CONFIDENCE_THRESHOLD,
+    YOLO_DEVICE,
+    YOLO_MODEL_PATH,
+    YOLO_SUPPORTED_CLASSES,
 )
 from core.models import (
     DetectionHealthStatus,
@@ -25,7 +29,7 @@ from core.models import (
     ViewerState,
 )
 from core.stream_health import derive_detection_status, derive_stream_status
-from core.types import DetectionResult
+from core.types import Detection, DetectionResult
 from streaming.latest_frame_reader import LatestFrameReader
 from web.overlay_hub import overlay_hub
 from web.schemas import DetectionsMessage, DetectionPayload, StatusMessage
@@ -51,6 +55,7 @@ class DetectionWorker:
         self._detector = None  # YOLODetector; loaded lazily in _start_worker
         self._frame_counter = 0
         self._detection_times: list[float] = []
+        self._status_message: Optional[str] = None
 
     # --- Public API ---
 
@@ -76,7 +81,7 @@ class DetectionWorker:
                     source_id=SOURCE_ID,
                     started_at=now,
                     stream_status=StreamStatus.CONNECTING,
-                    detection_status=DetectionHealthStatus.UNAVAILABLE,
+                    detection_status=DetectionHealthStatus.LOADING,
                 )
                 self._start_worker()
             self._session.active_viewer_count = len(self._active_viewers())
@@ -100,6 +105,10 @@ class DetectionWorker:
     def get_session_snapshot(self) -> Optional[LiveStreamSession]:
         return self._session
 
+    @property
+    def status_message(self) -> Optional[str]:
+        return self._status_message
+
     # --- Internal helpers ---
 
     def _active_viewers(self) -> list[ViewerSession]:
@@ -109,17 +118,53 @@ class DetectionWorker:
         if self._worker_task is None or self._worker_task.done():
             self._frame_reader = LatestFrameReader(STREAM_URL)
             self._frame_reader.start()
-            # Load YOLODetector if a model path is configured
-            model_path = os.environ.get("YOLO_MODEL_PATH", "")
-            if model_path and self._detector is None:
-                try:
-                    from core.infer.detector import YOLODetector
-                    device = os.environ.get("YOLO_DEVICE", "cpu")
-                    self._detector = YOLODetector.load(model_path, device=device)
-                    logger.info("detection_worker: loaded YOLODetector from %s on %s", model_path, device)
-                except Exception:
-                    logger.exception("detection_worker: failed to load YOLODetector; running without detector")
+            self._load_detector()
             self._worker_task = asyncio.create_task(self._run())
+
+    def _configured_model_path(self) -> str:
+        return os.environ.get("YOLO_MODEL_PATH", YOLO_MODEL_PATH).strip()
+
+    def _configured_device(self) -> str:
+        return os.environ.get("YOLO_DEVICE", YOLO_DEVICE).strip() or "cpu"
+
+    def _set_detection_state(self, status: DetectionHealthStatus, message: Optional[str] = None) -> None:
+        self._status_message = message
+        if self._session:
+            self._session.detection_status = status
+
+    def _load_detector(self) -> None:
+        if self._detector is not None:
+            self._set_detection_state(DetectionHealthStatus.ACTIVE)
+            return
+
+        model_path = self._configured_model_path()
+        if not model_path:
+            self._set_detection_state(
+                DetectionHealthStatus.UNAVAILABLE,
+                "Detection model unavailable",
+            )
+            logger.warning("detection_worker: YOLO_MODEL_PATH is not configured; no fallback detector will be used")
+            return
+
+        self._set_detection_state(DetectionHealthStatus.LOADING, "Loading detection model")
+        try:
+            from core.infer.detector import YOLODetector
+
+            device = self._configured_device()
+            self._detector = YOLODetector.load(
+                model_path,
+                device=device,
+                conf_threshold=YOLO_CONFIDENCE_THRESHOLD,
+            )
+            self._set_detection_state(DetectionHealthStatus.ACTIVE)
+            logger.info("detection_worker: loaded approved YOLODetector on %s", device)
+        except Exception:
+            self._detector = None
+            self._set_detection_state(
+                DetectionHealthStatus.UNAVAILABLE,
+                "Detection model unavailable",
+            )
+            logger.exception("detection_worker: failed to load configured YOLODetector")
 
     async def _run(self) -> None:
         logger.info("detection_worker: started for source=%s", SOURCE_ID)
@@ -198,6 +243,12 @@ class DetectionWorker:
                 )
                 result.frame_id = video_frame.frame_id
                 result.captured_at = video_frame.captured_at
+                result.detections = self._validated_detections(result.detections)
+                if self._session and self._session.detection_status == DetectionHealthStatus.UNAVAILABLE:
+                    await self._broadcast_status()
+                    elapsed = time.monotonic() - loop_start
+                    await asyncio.sleep(max(0, detection_interval - elapsed))
+                    continue
                 detection_time = time.monotonic() - t0
                 self._detection_times.append(detection_time)
                 if len(self._detection_times) > 30:
@@ -212,6 +263,7 @@ class DetectionWorker:
                     self._session.detection_status = derive_detection_status(
                         last_overlay_at=self._session.last_overlay_at,
                         last_frame_at=last_frame_time,
+                        stale_seconds=STALE_OVERLAY_MS / 1000,
                     )
 
                 await self._broadcast_overlay(video_frame, result, now_ms)
@@ -255,6 +307,21 @@ class DetectionWorker:
         )
         overlay_hub.broadcast(msg.to_ws_dict())
 
+    def _validated_detections(self, detections: list[Detection]) -> list[Detection]:
+        valid: list[Detection] = []
+        supported = set(YOLO_SUPPORTED_CLASSES)
+        for detection in detections:
+            if detection.class_name not in supported:
+                self._set_detection_state(
+                    DetectionHealthStatus.UNAVAILABLE,
+                    "Detection model class mismatch",
+                )
+                logger.error("detection_worker: unsupported YOLO class %s", detection.class_name)
+                return []
+            if detection.confidence >= YOLO_CONFIDENCE_THRESHOLD:
+                valid.append(detection)
+        return valid
+
     async def _broadcast_status(self) -> None:
         if self._session is None:
             return
@@ -266,6 +333,7 @@ class DetectionWorker:
             stream_status=self._session.stream_status,
             detection_status=self._session.detection_status,
             active_viewer_count=self._session.active_viewer_count,
+            message=self._status_message,
         )
         overlay_hub.broadcast(msg.to_ws_dict())
 

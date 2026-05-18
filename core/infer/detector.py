@@ -12,10 +12,11 @@ from pathlib import Path
 
 import numpy as np
 
+from config.setting import YOLO_CONFIDENCE_THRESHOLD, YOLO_SUPPORTED_CLASSES
 from core.types import Detection, DetectionResult
 
 
-CLASS_NAMES = ("fish", "feed", "debris", "lumpfish")
+CLASS_NAMES = YOLO_SUPPORTED_CLASSES
 
 
 class YOLODetector:
@@ -30,7 +31,7 @@ class YOLODetector:
         cls,
         model_path: str | Path,
         device: str = "cuda",
-        conf_threshold: float = 0.25,
+        conf_threshold: float = YOLO_CONFIDENCE_THRESHOLD,
     ) -> "YOLODetector":
         """Load a YOLO model from `model_path` onto `device`."""
         from ultralytics import YOLO  # ml group only
@@ -58,6 +59,8 @@ class YOLODetector:
                 conf = float(box.conf[0].cpu())
                 cls_idx = int(box.cls[0].cpu())
                 cls_name = result.names.get(cls_idx, str(cls_idx))
+                if conf < self._conf_threshold or cls_name not in CLASS_NAMES:
+                    continue
 
                 # Normalize to [0, 1]
                 bx = max(0.0, min(1.0, x1 / w))

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { OverlayMessage, StatusWsMessage } from '../types/streaming'
+import type { DetectionsMessage, StatusWsMessage } from '../types/streaming'
 
 interface UseOverlaySocketOptions {
   wsUrl: string | null
@@ -10,7 +10,7 @@ interface UseOverlaySocketOptions {
 }
 
 interface UseOverlaySocketResult {
-  latestOverlay: OverlayMessage | null
+  latestDetections: DetectionsMessage | null
   connected: boolean
 }
 
@@ -25,7 +25,7 @@ export function useOverlaySocket({
   staleMs,
   onStatus,
 }: UseOverlaySocketOptions): UseOverlaySocketResult {
-  const [latestOverlay, setLatestOverlay] = useState<OverlayMessage | null>(null)
+  const [latestDetections, setLatestDetections] = useState<DetectionsMessage | null>(null)
   const [connected, setConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectDelayRef = useRef(BASE_RECONNECT_MS)
@@ -80,11 +80,11 @@ export function useOverlaySocket({
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data as string)
-        if (data.type === 'overlay') {
-          const msg = data as OverlayMessage
+        if (data.schema === 'detections.v1' && data.type === 'detections') {
+          const msg = data as DetectionsMessage
           if (msg.timestamp_ms > latestTimestampRef.current) {
             latestTimestampRef.current = msg.timestamp_ms
-            setLatestOverlay(msg)
+            setLatestDetections(msg)
           }
         } else if (data.type === 'status') {
           onStatus?.(data as StatusWsMessage)
@@ -109,24 +109,24 @@ export function useOverlaySocket({
     }
   }, [wsUrl, viewerId, disconnect, onStatus])
 
-  // Stale overlay cleanup
+  // Stale detection cleanup
   useEffect(() => {
-    if (!latestOverlay) return
+    if (!latestDetections) return
     const timer = setTimeout(() => {
-      setLatestOverlay(prev => {
+      setLatestDetections(prev => {
         if (!prev) return null
         const age = Date.now() - prev.timestamp_ms
         return age > staleMs ? null : prev
       })
     }, staleMs)
     return () => clearTimeout(timer)
-  }, [latestOverlay, staleMs])
+  }, [latestDetections, staleMs])
 
   useEffect(() => {
     if (!enabled || !wsUrl) {
       stoppedRef.current = true
       disconnect()
-      setLatestOverlay(null)
+      setLatestDetections(null)
       latestTimestampRef.current = 0
       return
     }
@@ -138,5 +138,5 @@ export function useOverlaySocket({
     }
   }, [enabled, wsUrl]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { latestOverlay, connected }
+  return { latestDetections, connected }
 }

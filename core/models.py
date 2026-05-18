@@ -33,14 +33,9 @@ class StreamStatus(str, Enum):
 
 
 class DetectionHealthStatus(str, Enum):
-    # detections.v1 contract values
+    LOADING = "loading"
     ACTIVE = "active"
     STALE = "stale"
-    # Legacy overlay.v1 contract values
-    OK = "ok"
-    DELAYED = "delayed"
-    DEGRADED = "degraded"
-    # Shared
     UNAVAILABLE = "unavailable"
 
 

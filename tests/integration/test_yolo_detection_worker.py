@@ -180,3 +180,49 @@ async def test_broadcast_empty_detections_is_valid() -> None:
     assert len(broadcast_calls) == 1
     assert broadcast_calls[0]["detections"] == []
     assert broadcast_calls[0]["schema"] == "detections.v1"
+
+
+def test_missing_yolo_model_path_sets_unavailable_without_fallback(monkeypatch) -> None:
+    worker = DetectionWorker()
+    worker._session = MagicMock()
+    monkeypatch.delenv("YOLO_MODEL_PATH", raising=False)
+
+    worker._load_detector()
+
+    assert worker._detector is None
+    assert worker._session.detection_status == DetectionHealthStatus.UNAVAILABLE
+    assert worker.status_message == "Detection model unavailable"
+
+
+def test_failed_yolo_model_load_uses_safe_message(monkeypatch) -> None:
+    worker = DetectionWorker()
+    worker._session = MagicMock()
+    monkeypatch.setenv("YOLO_MODEL_PATH", "/tmp/secret/model.pt")
+
+    with patch("core.infer.detector.YOLODetector.load", side_effect=RuntimeError("raw /tmp/secret traceback")):
+        worker._load_detector()
+
+    assert worker._detector is None
+    assert worker._session.detection_status == DetectionHealthStatus.UNAVAILABLE
+    assert worker.status_message == "Detection model unavailable"
+    assert "/tmp/secret" not in worker.status_message
+
+
+def test_unsupported_yolo_class_sets_class_mismatch_unavailable() -> None:
+    worker = DetectionWorker()
+    worker._session = MagicMock()
+    detection = Detection(
+        class_name="shrimp",
+        class_index=9,
+        confidence=0.91,
+        bbox_x=0.1,
+        bbox_y=0.1,
+        bbox_w=0.2,
+        bbox_h=0.2,
+    )
+
+    result = worker._validated_detections([detection])
+
+    assert result == []
+    assert worker._session.detection_status == DetectionHealthStatus.UNAVAILABLE
+    assert worker.status_message == "Detection model class mismatch"
