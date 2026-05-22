@@ -7,12 +7,13 @@ so no GPU or model file is required.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from core.models import DetectionHealthStatus, StreamStatus
+from core.models import LiveStreamSession
 from core.types import Detection, DetectionResult
 from web.detection_worker import DetectionWorker
 from web.overlay_hub import overlay_hub
@@ -67,7 +68,7 @@ async def test_broadcast_contains_detections_v1_schema() -> None:
     def capture_broadcast(msg: dict) -> None:
         broadcast_calls.append(msg)
 
-    with patch.object(overlay_hub, "broadcast", side_effect=capture_broadcast):
+    with patch.object(worker, "_start_worker"), patch.object(overlay_hub, "broadcast", side_effect=capture_broadcast):
         session = await worker.register_viewer("viewer-1")
         assert session is not None
 
@@ -111,7 +112,8 @@ async def test_broadcast_contains_detections_v1_schema() -> None:
 @pytest.mark.asyncio
 async def test_broadcast_detections_list_has_correct_fields() -> None:
     worker = DetectionWorker()
-    session = await worker.register_viewer("viewer-2")
+    with patch.object(worker, "_start_worker"):
+        session = await worker.register_viewer("viewer-2")
 
     from core.models import VideoFrame
     import numpy as np
@@ -150,7 +152,8 @@ async def test_broadcast_detections_list_has_correct_fields() -> None:
 @pytest.mark.asyncio
 async def test_broadcast_empty_detections_is_valid() -> None:
     worker = DetectionWorker()
-    session = await worker.register_viewer("viewer-3")
+    with patch.object(worker, "_start_worker"):
+        session = await worker.register_viewer("viewer-3")
 
     from core.models import VideoFrame
     import numpy as np
@@ -226,3 +229,72 @@ def test_unsupported_yolo_class_sets_class_mismatch_unavailable() -> None:
     assert result == []
     assert worker._session.detection_status == DetectionHealthStatus.UNAVAILABLE
     assert worker.status_message == "Detection model class mismatch"
+
+
+def test_missing_stream_frames_sets_detection_source_unavailable() -> None:
+    worker = DetectionWorker()
+    worker._session = MagicMock()
+    worker._session.stream_status = StreamStatus.STREAM_UNAVAILABLE
+    worker._detector = object()
+
+    worker._sync_detection_state_for_frame_source(has_frame=False)
+
+    assert worker._session.detection_status == DetectionHealthStatus.UNAVAILABLE
+    assert worker.status_message == "Detection stream unavailable"
+
+
+def test_duplicate_frame_id_is_not_processed_twice() -> None:
+    worker = DetectionWorker()
+
+    assert worker._should_process_frame(7) is True
+    assert worker._should_process_frame(7) is False
+    assert worker._should_process_frame(8) is True
+
+
+def test_duplicate_frame_refreshes_stale_detection_status() -> None:
+    now = datetime.now(timezone.utc)
+    worker = DetectionWorker()
+    worker._detector = object()
+    worker._session = LiveStreamSession(
+        session_id="session-1",
+        source_id="cam",
+        started_at=now - timedelta(seconds=10),
+        stream_status=StreamStatus.LIVE,
+        detection_status=DetectionHealthStatus.ACTIVE,
+        last_frame_at=now,
+        last_overlay_at=now - timedelta(seconds=2),
+    )
+
+    worker._refresh_detection_state(now)
+
+    assert worker._session.detection_status == DetectionHealthStatus.STALE
+
+
+def test_detection_fps_uses_overlay_intervals_not_inference_duration() -> None:
+    now = datetime.now(timezone.utc)
+    worker = DetectionWorker()
+    worker._session = LiveStreamSession(
+        session_id="session-1",
+        source_id="cam",
+        started_at=now,
+    )
+
+    worker._record_overlay_timing(10.0)
+    worker._record_overlay_timing(10.1)
+
+    assert worker._session.detection_fps == 10.0
+
+
+def test_runtime_metrics_reset_between_worker_sessions() -> None:
+    worker = DetectionWorker()
+    worker._frame_counter = 10
+    worker._overlay_intervals = [0.2]
+    worker._last_overlay_monotonic = 123.0
+    worker._last_processed_frame_id = 42
+
+    worker._reset_runtime_metrics()
+
+    assert worker._frame_counter == 0
+    assert worker._overlay_intervals == []
+    assert worker._last_overlay_monotonic is None
+    assert worker._last_processed_frame_id is None

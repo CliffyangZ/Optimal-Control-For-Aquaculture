@@ -12,11 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
-from config.setting import YOLO_CONFIDENCE_THRESHOLD, YOLO_SUPPORTED_CLASSES
+from config.setting import YOLO_CONFIDENCE_THRESHOLD
 from core.types import Detection, DetectionResult
-
-
-CLASS_NAMES = YOLO_SUPPORTED_CLASSES
 
 
 class YOLODetector:
@@ -59,14 +56,20 @@ class YOLODetector:
                 conf = float(box.conf[0].cpu())
                 cls_idx = int(box.cls[0].cpu())
                 cls_name = result.names.get(cls_idx, str(cls_idx))
-                if conf < self._conf_threshold or cls_name not in CLASS_NAMES:
+                if conf < self._conf_threshold:
                     continue
 
-                # Normalize to [0, 1]
-                bx = max(0.0, min(1.0, x1 / w))
-                by = max(0.0, min(1.0, y1 / h))
-                bw = max(0.0, min(1.0 - bx, (x2 - x1) / w))
-                bh = max(0.0, min(1.0 - by, (y2 - y1) / h))
+                # Clip pixel coordinates before normalization so boxes crossing
+                # frame edges keep the correct visible width and height.
+                x1 = max(0.0, min(float(w), x1))
+                y1 = max(0.0, min(float(h), y1))
+                x2 = max(0.0, min(float(w), x2))
+                y2 = max(0.0, min(float(h), y2))
+
+                bx = x1 / w
+                by = y1 / h
+                bw = max(0.0, (x2 - x1) / w)
+                bh = max(0.0, (y2 - y1) / h)
 
                 detections.append(Detection(
                     class_name=cls_name,

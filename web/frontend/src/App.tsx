@@ -48,6 +48,7 @@ export default function App() {
     },
   })
 
+  const effectiveStreamStatus: StreamStatus = latestDetections?.stream_status ?? streamStatus
   const effectiveDetectionStatus: DetectionStatus = latestDetections?.detection_status ?? detectionStatus
 
   // Load config on mount
@@ -117,7 +118,7 @@ export default function App() {
 
       <main className="app-main">
         <div className="video-area">
-          <VideoStage ref={videoRef} rtcState={rtcState} streamStatus={streamStatus}>
+          <VideoStage ref={videoRef} rtcState={rtcState} streamStatus={effectiveStreamStatus}>
             {overlayEnabled && latestDetections && (
               <OverlayLayer
                 overlay={latestDetections}
@@ -130,7 +131,7 @@ export default function App() {
 
         <aside className="app-sidebar">
           <StatusPanel
-            streamStatus={streamStatus}
+            streamStatus={effectiveStreamStatus}
             detectionStatus={effectiveDetectionStatus}
             rtcState={rtcState}
             rtcError={rtcError}

@@ -252,7 +252,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_in.add_argument("--model", type=Path, required=True, help="Path to .pt weights file")
     p_in.add_argument("--source", type=str, required=True, help="Image path, video path, or RTSP URL")
     p_in.add_argument("--output", type=str, default=None, help="Output video path (optional; if not provided, only JSON output)")
-    p_in.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
+    p_in.add_argument("--conf", type=float, default=0.70, help="Confidence threshold")
     p_in.add_argument("--device", type=str, default="cuda", help="Inference device (cuda/cpu/0)")
     p_in.set_defaults(func=_cmd_infer)
 

@@ -63,6 +63,11 @@ export function StatusPanel({
           Playback error: {rtcError}
         </div>
       )}
+      {rtcState === 'live' && streamStatus === 'stream_unavailable' && (
+        <div className="status-message status-message--warn">
+          Live video is connected, but backend detection cannot read the RTSP source.
+        </div>
+      )}
       {detectionStatus === 'stale' && (
         <div className="status-message status-message--info">
           Detection stale; live video remains active.
