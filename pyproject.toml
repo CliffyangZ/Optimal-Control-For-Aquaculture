@@ -45,6 +45,7 @@ ml = [
     "roboflow>=1.1.0",
     "scikit-learn>=1.5.0",
     "python-dotenv>=1.0.0",
+    "albumentations>=1.4.0",
 ]
 
 [tool.setuptools.packages.find]
