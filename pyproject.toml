@@ -49,7 +49,7 @@ ml = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["config*", "core*", "streaming*", "validation*", "web*"]
+include = ["config*", "core*", "pi_controller*", "streaming*", "validation*", "web*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

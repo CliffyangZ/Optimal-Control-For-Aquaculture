@@ -20,8 +20,6 @@ class DatasetConfig:
     roboflow_version: int
     roboflow_format: str
     local_cache_dir: Path
-    n_folds: int
-    fold_output_dir: Path
 
 
 @dataclass
@@ -38,6 +36,15 @@ class ModelConfig:
     mixup: float
     patience: int
     seed: int
+    # Data augmentation
+    hsv_h: float = 0.015
+    hsv_s: float = 0.7
+    hsv_v: float = 0.4
+    degrees: float = 10.0
+    translate: float = 0.1
+    scale: float = 0.5
+    flipud: float = 0.1
+    fliplr: float = 0.5
 
 
 @dataclass
@@ -104,8 +111,6 @@ def load_training_config(
         roboflow_version=int(ds["roboflow_version"]),
         roboflow_format=ds["roboflow_format"],
         local_cache_dir=Path(ds["local_cache_dir"]),
-        n_folds=int(ds["n_folds"]),
-        fold_output_dir=Path(ds["fold_output_dir"]),
     )
 
     m = raw["model"]
@@ -122,6 +127,14 @@ def load_training_config(
         mixup=float(m["mixup"]),
         patience=int(m["patience"]),
         seed=int(m["seed"]),
+        hsv_h=float(m.get("hsv_h", 0.015)),
+        hsv_s=float(m.get("hsv_s", 0.7)),
+        hsv_v=float(m.get("hsv_v", 0.4)),
+        degrees=float(m.get("degrees", 10.0)),
+        translate=float(m.get("translate", 0.1)),
+        scale=float(m.get("scale", 0.5)),
+        flipud=float(m.get("flipud", 0.1)),
+        fliplr=float(m.get("fliplr", 0.5)),
     )
 
     w = raw["wandb"]

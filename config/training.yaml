@@ -4,22 +4,29 @@ dataset:
   roboflow_version: 1
   roboflow_format: yolo26
   local_cache_dir: data/datasets/fishtracker_v2
-  n_folds: 5
-  fold_output_dir: data/kfold
 
 model:
   weights: yolo26s.pt
   variant: yolo26s
   output_dir: runs/train
-  epochs: 100
-  batch: 8
-  imgsz: 640
+  epochs: 300
+  batch: 16
+  imgsz: 832
   workers: 4
   mosaic: 1.0
   close_mosaic: 10
-  mixup: 0.1
+  mixup: 0.2
   patience: 50
   seed: 42
+  # Data augmentation
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  degrees: 10.0
+  translate: 0.1
+  scale: 0.5
+  flipud: 0.1
+  fliplr: 0.5
 
 wandb:
   project: Aqua_CV_Project

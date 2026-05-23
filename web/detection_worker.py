@@ -1,6 +1,7 @@
 """Shared detection worker lifecycle for one configured stream."""
 
 import asyncio
+import functools
 import logging
 import os
 import time
@@ -122,8 +123,9 @@ class DetectionWorker:
             self._reset_runtime_metrics()
             self._frame_reader = LatestFrameReader(STREAM_URL)
             self._frame_reader.start()
-            self._load_detector()
             self._worker_task = asyncio.create_task(self._run())
+            # _load_detector() is invoked at the top of _run() via run_in_executor
+            # so model loading never blocks the event loop
 
     def _reset_runtime_metrics(self) -> None:
         self._frame_counter = 0
@@ -210,11 +212,11 @@ class DetectionWorker:
             logger.warning("detection_worker: YOLO_MODEL_PATH is not configured; no fallback detector will be used")
             return
 
+        device = self._configured_device()
         self._set_detection_state(DetectionHealthStatus.LOADING, "Loading detection model")
         try:
             from core.infer.detector import YOLODetector
 
-            device = self._configured_device()
             logger.info(
                 "detection_worker: loading YOLODetector model_path=%s device=%s conf_threshold=%.3f",
                 model_path,
@@ -241,11 +243,16 @@ class DetectionWorker:
             logger.exception(
                 "detection_worker: failed to load YOLODetector model_path=%s device=%s",
                 model_path,
-                self._configured_device(),
+                device,
             )
 
     async def _run(self) -> None:
         logger.info("detection_worker: started for source=%s", SOURCE_ID)
+        loop = asyncio.get_running_loop()
+
+        # Load model in thread pool so the event loop stays responsive during init
+        await loop.run_in_executor(None, self._load_detector)
+
         detection_interval = 1.0 / TARGET_DETECTION_FPS if TARGET_DETECTION_FPS > 0 else 0.1
         idle_since: Optional[float] = None
 
@@ -324,12 +331,14 @@ class DetectionWorker:
                     await asyncio.sleep(max(0, detection_interval - elapsed))
                     continue
 
-                # Run YOLO inference (offload to thread executor to avoid blocking event loop)
-                loop = asyncio.get_event_loop()
+                # Run YOLO inference in thread pool to avoid blocking event loop
                 try:
-                    result: DetectionResult = await loop.run_in_executor(
-                        None, self._detector.detect, raw_frame.image
+                    detect_fn = functools.partial(
+                        self._detector.detect,
+                        video_frame.image,
+                        frame_id=video_frame.frame_id,
                     )
+                    result: DetectionResult = await loop.run_in_executor(None, detect_fn)
                 except Exception:
                     self._detector = None
                     self._set_detection_state(
@@ -341,7 +350,7 @@ class DetectionWorker:
                     elapsed = time.monotonic() - loop_start
                     await asyncio.sleep(max(0, detection_interval - elapsed))
                     continue
-                result.frame_id = video_frame.frame_id
+                # Override captured_at with the frame's acquisition time, not inference time
                 result.captured_at = video_frame.captured_at
                 result.detections = self._validated_detections(result.detections)
                 if self._session and self._session.detection_status == DetectionHealthStatus.UNAVAILABLE:
@@ -403,7 +412,6 @@ class DetectionWorker:
         overlay_hub.broadcast(msg.to_ws_dict())
 
     def _validated_detections(self, detections: list[Detection]) -> list[Detection]:
-        valid: list[Detection] = []
         supported = set(YOLO_SUPPORTED_CLASSES)
         for detection in detections:
             if detection.class_name not in supported:
@@ -413,9 +421,7 @@ class DetectionWorker:
                 )
                 logger.error("detection_worker: unsupported YOLO class %s", detection.class_name)
                 return []
-            if detection.confidence >= YOLO_CONFIDENCE_THRESHOLD:
-                valid.append(detection)
-        return valid
+        return list(detections)
 
     async def _broadcast_status(self) -> None:
         if self._session is None:

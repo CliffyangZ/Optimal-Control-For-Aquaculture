@@ -3,8 +3,7 @@
 Covers:
 - quality gate passes when all class metrics exceed thresholds
 - quality gate fails and populates threshold_violations correctly
-- mean/std calculation
-- cv_report.json schema (no GPU required — all fold metrics are mocked)
+- evaluation_report.json schema (no GPU required — all metrics are mocked)
 """
 
 from __future__ import annotations
@@ -16,10 +15,8 @@ import pytest
 
 from core.config import ClassThreshold, EvaluationConfig
 from core.train.evaluator import (
-    AggregateClassMetrics,
     ClassMetrics,
-    CrossFoldEvaluator,
-    FoldMetrics,
+    Evaluator,
     MetricsReport,
 )
 
@@ -35,7 +32,7 @@ def _make_class_metrics(
     return ClassMetrics(class_name=name, precision=precision, recall=recall, f1=f1, map50=map50)
 
 
-def _make_fold(k: int, class_values: dict[str, dict[str, float]]) -> FoldMetrics:
+def _make_report(class_values: dict[str, dict[str, float]]) -> MetricsReport:
     classes = {}
     for name, vals in class_values.items():
         classes[name] = ClassMetrics(
@@ -49,7 +46,25 @@ def _make_fold(k: int, class_values: dict[str, dict[str, float]]) -> FoldMetrics
     for name in ("fish", "feed", "debris", "lumpfish"):
         if name not in classes:
             classes[name] = _make_class_metrics(name)
-    return FoldMetrics(fold_index=k, classes=classes)
+
+    # Compute quality gate with default config
+    config = _default_config()
+    violations: list[str] = []
+    for name in ("fish", "feed", "debris", "lumpfish"):
+        cm = classes[name]
+        threshold_cfg = config.thresholds.get(name)
+        if not threshold_cfg:
+            continue
+        if threshold_cfg.map50 is not None and cm.map50 < threshold_cfg.map50:
+            violations.append(f"{name}: map50={cm.map50:.3f} < threshold {threshold_cfg.map50}")
+        if threshold_cfg.recall is not None and cm.recall < threshold_cfg.recall:
+            violations.append(f"{name}: recall={cm.recall:.3f} < threshold {threshold_cfg.recall}")
+
+    return MetricsReport(
+        classes=classes,
+        quality_gate_passed=len(violations) == 0,
+        threshold_violations=violations,
+    )
 
 
 def _default_config() -> EvaluationConfig:
@@ -66,103 +81,54 @@ def _default_config() -> EvaluationConfig:
 # ---------------------------------------------------------------------------
 
 def test_quality_gate_passes_when_all_above_threshold() -> None:
-    folds = [
-        _make_fold(k, {"fish": {"map50": 0.80}, "feed": {"map50": 0.75, "recall": 0.80}})
-        for k in range(5)
-    ]
-    evaluator = CrossFoldEvaluator(_default_config())
-    report = evaluator.aggregate(folds)
+    report = _make_report({"fish": {"map50": 0.80}, "feed": {"map50": 0.75, "recall": 0.80}})
     assert report.quality_gate_passed is True
     assert report.threshold_violations == []
 
 
 def test_quality_gate_fails_on_low_map50() -> None:
     # fish map50=0.70 < threshold 0.75
-    folds = [
-        _make_fold(k, {"fish": {"map50": 0.70}, "feed": {"map50": 0.75, "recall": 0.80}})
-        for k in range(5)
-    ]
-    evaluator = CrossFoldEvaluator(_default_config())
-    report = evaluator.aggregate(folds)
+    report = _make_report({"fish": {"map50": 0.70}, "feed": {"map50": 0.75, "recall": 0.80}})
     assert report.quality_gate_passed is False
-    assert any("fish" in v and "mean_map50" in v for v in report.threshold_violations)
+    assert any("fish" in v and "map50" in v for v in report.threshold_violations)
 
 
 def test_quality_gate_fails_on_low_recall() -> None:
     # feed recall=0.70 < threshold 0.75
-    folds = [
-        _make_fold(k, {"fish": {"map50": 0.80}, "feed": {"map50": 0.75, "recall": 0.70}})
-        for k in range(5)
-    ]
-    evaluator = CrossFoldEvaluator(_default_config())
-    report = evaluator.aggregate(folds)
+    report = _make_report({"fish": {"map50": 0.80}, "feed": {"map50": 0.75, "recall": 0.70}})
     assert report.quality_gate_passed is False
     assert any("feed" in v and "recall" in v for v in report.threshold_violations)
 
 
 def test_quality_gate_multiple_violations() -> None:
-    folds = [
-        _make_fold(k, {
-            "fish": {"map50": 0.60},
-            "feed": {"map50": 0.60, "recall": 0.60},
-        })
-        for k in range(5)
-    ]
-    evaluator = CrossFoldEvaluator(_default_config())
-    report = evaluator.aggregate(folds)
+    report = _make_report({
+        "fish": {"map50": 0.60},
+        "feed": {"map50": 0.60, "recall": 0.60},
+    })
     assert report.quality_gate_passed is False
     assert len(report.threshold_violations) >= 3  # fish map50, feed map50, feed recall
 
 
 def test_no_threshold_classes_do_not_affect_gate() -> None:
     """debris and lumpfish have no thresholds — gate should be indifferent to them."""
-    folds = [
-        _make_fold(k, {
-            "fish": {"map50": 0.80},
-            "feed": {"map50": 0.75, "recall": 0.80},
-            "debris": {"map50": 0.10},
-            "lumpfish": {"map50": 0.10},
-        })
-        for k in range(5)
-    ]
-    evaluator = CrossFoldEvaluator(_default_config())
-    report = evaluator.aggregate(folds)
+    report = _make_report({
+        "fish": {"map50": 0.80},
+        "feed": {"map50": 0.75, "recall": 0.80},
+        "debris": {"map50": 0.10},
+        "lumpfish": {"map50": 0.10},
+    })
     assert report.quality_gate_passed is True
 
 
 # ---------------------------------------------------------------------------
-# Mean / std calculation
-# ---------------------------------------------------------------------------
-
-def test_mean_and_std_calculation() -> None:
-    import numpy as np
-
-    map50_values = [0.80, 0.82, 0.78, 0.81, 0.79]
-    folds = [
-        _make_fold(k, {"fish": {"map50": v}, "feed": {"map50": 0.75, "recall": 0.80}})
-        for k, v in enumerate(map50_values)
-    ]
-    evaluator = CrossFoldEvaluator(_default_config())
-    report = evaluator.aggregate(folds)
-
-    agg = report.aggregate["fish"]
-    assert abs(agg.mean_map50 - float(np.mean(map50_values))) < 1e-6
-    assert abs(agg.std_map50 - float(np.std(map50_values))) < 1e-6
-
-
-# ---------------------------------------------------------------------------
-# cv_report.json schema
+# evaluation_report.json schema
 # ---------------------------------------------------------------------------
 
 def test_write_report_json_schema(tmp_path: Path) -> None:
-    folds = [
-        _make_fold(k, {"fish": {"map50": 0.80}, "feed": {"map50": 0.75, "recall": 0.80}})
-        for k in range(5)
-    ]
-    evaluator = CrossFoldEvaluator(_default_config())
-    report = evaluator.aggregate(folds)
+    report = _make_report({"fish": {"map50": 0.80}, "feed": {"map50": 0.75, "recall": 0.80}})
+    evaluator = Evaluator(_default_config())
 
-    out = tmp_path / "cv_report.json"
+    out = tmp_path / "evaluation_report.json"
     evaluator.write_report(report, out)
 
     assert out.exists()
@@ -170,40 +136,26 @@ def test_write_report_json_schema(tmp_path: Path) -> None:
 
     assert "quality_gate_passed" in data
     assert "threshold_violations" in data
-    assert "aggregate" in data
-    assert "fold_metrics" in data
+    assert "classes" in data
 
-    # Aggregate must have all 4 classes
+    # Classes must have all 4 classes
     for name in ("fish", "feed", "debris", "lumpfish"):
-        assert name in data["aggregate"]
-        agg = data["aggregate"][name]
-        assert "mean_map50" in agg
-        assert "std_map50" in agg
-        assert "mean_recall" in agg
+        assert name in data["classes"]
+        cm = data["classes"][name]
+        assert "precision" in cm
+        assert "recall" in cm
+        assert "f1" in cm
+        assert "map50" in cm
 
 
-def test_write_report_json_has_feed_aggregate_fields(tmp_path: Path) -> None:
-    folds = [
-        _make_fold(k, {"fish": {"map50": 0.80}, "feed": {"map50": 0.75, "recall": 0.80}})
-        for k in range(5)
-    ]
-    evaluator = CrossFoldEvaluator(_default_config())
-    report = evaluator.aggregate(folds)
+def test_write_report_json_has_class_fields(tmp_path: Path) -> None:
+    report = _make_report({"fish": {"map50": 0.80}, "feed": {"map50": 0.75, "recall": 0.80}})
+    evaluator = Evaluator(_default_config())
 
-    out = tmp_path / "cv_report.json"
+    out = tmp_path / "evaluation_report.json"
     evaluator.write_report(report, out)
     data = json.loads(out.read_text())
 
-    feed = data["aggregate"]["feed"]
-    assert feed["threshold_map50"] == pytest.approx(0.70)
-    assert feed["threshold_recall"] == pytest.approx(0.75)
-
-
-def test_write_report_fold_metrics_count(tmp_path: Path) -> None:
-    folds = [_make_fold(k, {}) for k in range(5)]
-    evaluator = CrossFoldEvaluator(_default_config())
-    report = evaluator.aggregate(folds)
-    out = tmp_path / "cv_report.json"
-    evaluator.write_report(report, out)
-    data = json.loads(out.read_text())
-    assert len(data["fold_metrics"]) == 5
+    feed = data["classes"]["feed"]
+    assert feed["map50"] == pytest.approx(0.75)
+    assert feed["recall"] == pytest.approx(0.80)

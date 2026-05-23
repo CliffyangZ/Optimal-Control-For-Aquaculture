@@ -37,7 +37,6 @@ class FishTrackerDataset:
         self.config = config
         self.project_root = (project_root or Path.cwd()).resolve()
         self.local_cache_dir = (self.project_root / config.dataset.local_cache_dir).resolve()
-        self.fold_output_dir = (self.project_root / config.dataset.fold_output_dir).resolve()
 
     # ------------------------------------------------------------------ download
     def download(self) -> Path:
@@ -142,73 +141,6 @@ class FishTrackerDataset:
             dataset_yaml=dataset_yaml,
         )
 
-    # ----------------------------------------------------------------- k-fold CV
-    def generate_kfold_splits(self) -> list[Path]:
-        """Generate 5-fold CV splits.
-
-        Writes one `data/kfold/fold_{i}.yaml` per fold and links each fold's
-        train/val image files under `data/kfold/fold_{i}/{train,val}/images` along
-        with matching labels under `.../labels`.
-
-        Returns the list of fold YAML paths.
-        """
-        from sklearn.model_selection import KFold  # local import: ml group only
-
-        images = self._all_image_paths()
-        if not images:
-            raise ValueError(f"No images found under {self.local_cache_dir}")
-
-        n_folds = self.config.dataset.n_folds
-        kf = KFold(n_splits=n_folds, shuffle=True, random_state=self.config.model.seed)
-
-        self.fold_output_dir.mkdir(parents=True, exist_ok=True)
-        fold_yaml_paths: list[Path] = []
-        seen_val_stems: set[str] = set()
-
-        for k, (train_idx, val_idx) in enumerate(kf.split(images)):
-            fold_dir = self.fold_output_dir / f"fold_{k}"
-            for split, indices in (("train", train_idx), ("val", val_idx)):
-                img_dst = fold_dir / split / "images"
-                lbl_dst = fold_dir / split / "labels"
-                self._reset_dir(img_dst)
-                self._reset_dir(lbl_dst)
-                for idx in indices:
-                    img = images[idx]
-                    lbl = self._label_path_for(img)
-                    self._link_or_copy(img, img_dst / img.name)
-                    if lbl.exists():
-                        self._link_or_copy(lbl, lbl_dst / lbl.name)
-                    if split == "val":
-                        seen_val_stems.add(img.stem)
-
-            yaml_path = self.fold_output_dir / f"fold_{k}.yaml"
-            yaml_path.write_text(
-                yaml.safe_dump(
-                    {
-                        "path": str(self.project_root),
-                        "train": str(
-                            (fold_dir / "train" / "images").relative_to(self.project_root)
-                        ),
-                        "val": str(
-                            (fold_dir / "val" / "images").relative_to(self.project_root)
-                        ),
-                        "nc": len(CLASS_NAMES),
-                        "names": list(CLASS_NAMES),
-                    },
-                    sort_keys=False,
-                ),
-                encoding="utf-8",
-            )
-            fold_yaml_paths.append(yaml_path)
-
-        # Invariant: every image stem appears in exactly one fold's val set.
-        if len(seen_val_stems) != len(images):
-            raise RuntimeError(
-                f"KFold invariant broken: {len(seen_val_stems)} unique val stems "
-                f"vs {len(images)} images"
-            )
-
-        return fold_yaml_paths
 
     # ------------------------------------------------------------------ helpers
     @staticmethod

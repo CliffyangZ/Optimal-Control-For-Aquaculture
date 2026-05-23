@@ -54,9 +54,10 @@ class LatestFrameReader:
     def stop(self) -> None:
         """Stop reading frames and release resources."""
         self._reading = False
+        # Release capture before join: unblocks a thread stuck in capture.read()
+        self._stop_capture()
         if self._reader_thread:
             self._reader_thread.join(timeout=2)
-        self._stop_capture()
 
     def get_latest_frame(self) -> CurrentFrame:
         """Get the latest frame if available."""

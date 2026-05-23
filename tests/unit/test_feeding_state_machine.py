@@ -25,6 +25,7 @@ def _make_config(**kwargs) -> FeedingConfig:
         debris_threshold=3.0,
         wait_timer_s=30.0,
         camera_failure_timeout_s=10.0,
+        dispense_duration_s=2.0,
     )
     defaults.update(kwargs)
     return FeedingConfig(**defaults)
@@ -108,13 +109,31 @@ def test_precheck_to_dispense_when_no_feed() -> None:
     assert cmd == BMduinoCommand.FEED
 
 
-def test_dispense_to_waiting() -> None:
-    fsm = FeedingStateMachine(_make_config())
-    fsm.trigger_feeding()
-    fsm.update(_empty_window(), last_detection_age_s=0.0)  # PRECHECK → DISPENSE
-    cmd = fsm.update(_empty_window(), last_detection_age_s=0.0)  # DISPENSE → WAITING
-    assert fsm.state == FeedingState.WAITING
-    assert cmd == BMduinoCommand.STOP
+def test_dispense_holds_until_timer_expires() -> None:
+    """DISPENSE must stay active for dispense_duration_s before sending STOP."""
+    with patch("core.infer.state_machine.time") as mock_time:
+        mock_time.monotonic.side_effect = [
+            0.0,  # __init__
+            1.0,  # _transition(PRECHECK) in trigger_feeding
+            2.0,  # _transition(DISPENSE) in PRECHECK update
+            2.1,  # _time_in_state(): 0.1s < 2.0s → stay in DISPENSE
+            4.5,  # _time_in_state(): 2.5s >= 2.0s → transition
+            5.0,  # _transition(WAITING)
+        ]
+        fsm = FeedingStateMachine(_make_config(dispense_duration_s=2.0))
+        fsm.trigger_feeding()
+
+        cmd1 = fsm.update(_empty_window(), last_detection_age_s=0.0)  # PRECHECK → DISPENSE
+        assert fsm.state == FeedingState.DISPENSE
+        assert cmd1 == BMduinoCommand.FEED
+
+        cmd2 = fsm.update(_empty_window(), last_detection_age_s=0.0)  # DISPENSE (not expired)
+        assert fsm.state == FeedingState.DISPENSE
+        assert cmd2 is None
+
+        cmd3 = fsm.update(_empty_window(), last_detection_age_s=0.0)  # DISPENSE → WAITING
+        assert fsm.state == FeedingState.WAITING
+        assert cmd3 == BMduinoCommand.STOP
 
 
 def test_waiting_to_checking_after_timer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -248,3 +267,29 @@ def test_trigger_feeding_only_works_from_idle() -> None:
     fsm._state = FeedingState.CHECKING
     fsm.trigger_feeding()
     assert fsm.state == FeedingState.CHECKING
+
+
+# ---------------------------------------------------------------------------
+# reset()
+# ---------------------------------------------------------------------------
+
+def test_reset_from_done_returns_to_idle() -> None:
+    fsm = FeedingStateMachine(_make_config())
+    fsm._state = FeedingState.DONE
+    fsm.reset()
+    assert fsm.state == FeedingState.IDLE
+
+
+def test_reset_from_alert_returns_to_idle() -> None:
+    fsm = FeedingStateMachine(_make_config())
+    fsm._state = FeedingState.ALERT
+    fsm.reset()
+    assert fsm.state == FeedingState.IDLE
+
+
+def test_trigger_feeding_works_after_reset() -> None:
+    fsm = FeedingStateMachine(_make_config())
+    fsm._state = FeedingState.DONE
+    fsm.reset()
+    fsm.trigger_feeding()
+    assert fsm.state == FeedingState.PRECHECK

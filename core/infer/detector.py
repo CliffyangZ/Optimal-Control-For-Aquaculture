@@ -27,7 +27,7 @@ class YOLODetector:
     def load(
         cls,
         model_path: str | Path,
-        device: str = "cuda",
+        device: str = "cpu",
         conf_threshold: float = YOLO_CONFIDENCE_THRESHOLD,
     ) -> "YOLODetector":
         """Load a YOLO model from `model_path` onto `device`."""
@@ -37,7 +37,7 @@ class YOLODetector:
         model.to(device)
         return cls(model, conf_threshold)
 
-    def detect(self, raw_frame: np.ndarray) -> DetectionResult:
+    def detect(self, raw_frame: np.ndarray, frame_id: int = 0) -> DetectionResult:
         """Run inference on a single BGR frame and return normalized detections."""
         t0 = time.monotonic()
         results = self._model(raw_frame, conf=self._conf_threshold, verbose=False)
@@ -56,8 +56,6 @@ class YOLODetector:
                 conf = float(box.conf[0].cpu())
                 cls_idx = int(box.cls[0].cpu())
                 cls_name = result.names.get(cls_idx, str(cls_idx))
-                if conf < self._conf_threshold:
-                    continue
 
                 # Clip pixel coordinates before normalization so boxes crossing
                 # frame edges keep the correct visible width and height.
@@ -82,7 +80,7 @@ class YOLODetector:
                 ))
 
         return DetectionResult(
-            frame_id=0,
+            frame_id=frame_id,
             captured_at=datetime.now(timezone.utc),
             source_width=w,
             source_height=h,
