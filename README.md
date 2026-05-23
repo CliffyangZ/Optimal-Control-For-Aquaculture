@@ -7,19 +7,22 @@
 
 ![Software Architecture](assets/software_arch.drawio.svg)
 
+### Current Feature Source Of Truth
+
+The current web recognition behavior is defined by `specs/003-replace-ripple-yolo/`. The supported operator path is YOLO object detection for `fish`, `lumpfish`, `feed`, and `debris` delivered as `detections.v1` messages to the React monitoring UI.
+
+Legacy ripple, activity, heatmap, and spatiotemporal materials may remain as historical artifacts, but they are not the active web detection behavior.
+
 ### File Structure
 
 ```text
 Aquaculture_CV_Project/
 ├── config/
-│   └── setting.py                              # Extended with spatiotemporal parameters
+│   └── setting.py                              # Stream and approved YOLO runtime settings
 ├── core/
-│   ├── activity_levels.py
-│   ├── models.py                               # Extended with spatiotemporal dataclasses
-│   ├── ripple_detector.py                      # Legacy simple detector
-│   ├── spatial_features.py                     # NEW: Canny edges, Sobel gradients
-│   ├── temporal_features.py                    # NEW: Optical flow, motion energy
-│   ├── spatiotemporal_pipeline.py              # NEW: Per-frame analysis pipeline
+│   ├── infer/
+│   │   └── detector.py                         # Approved YOLO detection inference
+│   ├── models.py                               # Web session, stream, and detection statuses
 │   └── stream_health.py
 ├── drivers/
 │   └── README.md
@@ -27,19 +30,16 @@ Aquaculture_CV_Project/
 │   └── latest_frame_reader.py
 ├── tests/
 │   ├── unit/
-│   │   ├── test_spatial_features.py            # NEW
-│   │   ├── test_temporal_features.py           # NEW
-│   │   └── test_activity_fusion.py             # NEW
+│   │   ├── test_overlay_payloads.py
+│   │   └── test_module_boundaries.py
 │   └── integration/
-│       ├── test_spatiotemporal_pipeline.py     # NEW
-│       └── test_monitoring_ui_contract.py      # Updated
+│       ├── test_yolo_detection_worker.py
+│       └── test_monitoring_ui_contract.py
 ├── validation/
 │   ├── clip_manifest.py
 │   └── run_clip_validation.py
 └── web/
     ├── app.py                                  # FastAPI backend
-    ├── streamlit_app.py                        # NEW: Streamlit UI for spatiotemporal analysis
-    ├── components.py                           # NEW: Heatmap and grid rendering
     ├── detection_worker.py                     # Shared detection loop
     ├── overlay_hub.py                          # WebSocket broadcast hub
     ├── schemas.py                              # Pydantic API/WS schemas
@@ -48,40 +48,11 @@ Aquaculture_CV_Project/
         └── dist/                               # Built for production serving
 ```
 
-## 3. Spatiotemporal Water Ripple Analysis
+## 3. YOLO Web Detection
 
-The system includes real-time spatiotemporal analysis for detecting aquatic activity from water-surface video streams.
+The active monitoring UI uses an explicitly configured approved YOLO model. Configure `YOLO_MODEL_PATH` before starting the backend. If the model path is missing, invalid, or incompatible with the supported classes, live video remains available and recognition is shown as unavailable.
 
-### Features
-
-- **Real-time Activity Scoring**: Continuous 0–1 activity score updated each frame
-- **Spatial Analysis**: Canny edge detection and Sobel gradient analysis over an 8×8 grid
-- **Temporal Analysis**: Farneback dense optical flow and frame differencing
-- **Activity Heatmap**: Per-cell activity visualization with configurable colormap overlay
-- **Time-Series Tracking**: Historical activity scores with trend analysis and CSV export
-- **Live Monitoring UI**: Streamlit interface with Start/Stop controls and raw/processed view toggle
-
-### Running the Streamlit UI
-
-```bash
-streamlit run web/streamlit_app.py
-```
-
-Configure the stream source in `config/setting.py`:
-- `STREAM_URL`: RTSP URL or local video file path
-- `GRID_ROWS`, `GRID_COLS`: Grid dimensions (default 8×8)
-- `WINDOW_FRAMES`: Temporal smoothing window size (default 30 frames)
-
-### Testing
-
-Run the test suite to validate feature extraction and pipeline integration:
-
-```bash
-pytest tests/unit/test_spatial_features.py -v
-pytest tests/unit/test_temporal_features.py -v
-pytest tests/unit/test_activity_fusion.py -v
-pytest tests/integration/test_spatiotemporal_pipeline.py -v
-```
+Supported detection classes are `fish`, `lumpfish`, `feed`, and `debris`.
 
 ## 4. Development Principles
 
@@ -112,7 +83,8 @@ docker compose -f compose.mediamtx.desktop.yml up
 cd web/frontend && npm install && npm run build && cd ../..
 
 # 3. Start the FastAPI backend
-uvicorn web.app:app --host 0.0.0.0 --port 8000
+export YOLO_MODEL_PATH=/absolute/path/to/approved-model.pt
+uv run --group ml uvicorn web.app:app --host 0.0.0.0 --port 8000
 
 # 4. Open http://localhost:8000 in Chrome or Edge and click Start
 ```
@@ -121,7 +93,7 @@ uvicorn web.app:app --host 0.0.0.0 --port 8000
 
 ## 6. Local Stream Relay Setup (MediaMTX)
 
-The ripple monitoring feature requires a local RTSP relay (MediaMTX) to accept a smartphone camera stream and expose it to the application.
+The monitoring feature requires a local RTSP relay (MediaMTX) to accept a camera stream and expose it to the application.
 
 ### MediaMTX Setup Without Docker
 
@@ -190,6 +162,6 @@ The following features are explicitly NOT included in the MVP:
 - **Feeding recommendations**: No algorithmic feeding guidance.
 - **Fish location estimates**: No tracking of fish position or count.
 - **Automatic image saving**: Frames are not automatically saved to disk.
-- **Video recording**: No recording of streams or detected activity.
+- **Video recording**: No recording of streams or detection events.
 - **Authentication or RBAC**: No login system or role-based access control.
 - **Public network exposure**: MVP is designed for local networks only.

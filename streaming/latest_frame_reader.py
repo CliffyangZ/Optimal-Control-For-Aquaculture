@@ -1,10 +1,11 @@
 """RTSP frame acquisition with latest-frame-only buffering."""
 
 import cv2
+import numpy as np
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from core.models import CurrentFrame
 from config.setting import TARGET_WIDTH, TARGET_HEIGHT, INTERRUPTION_TIMEOUT_SECONDS
 
@@ -53,9 +54,10 @@ class LatestFrameReader:
     def stop(self) -> None:
         """Stop reading frames and release resources."""
         self._reading = False
+        # Release capture before join: unblocks a thread stuck in capture.read()
+        self._stop_capture()
         if self._reader_thread:
             self._reader_thread.join(timeout=2)
-        self._stop_capture()
 
     def get_latest_frame(self) -> CurrentFrame:
         """Get the latest frame if available."""
@@ -91,9 +93,9 @@ class LatestFrameReader:
                 continue
 
             self._consecutive_failures = 0
-            frame = cv2.resize(frame, (TARGET_WIDTH, TARGET_HEIGHT))
+            frame = self._letterbox_resize(frame, (TARGET_WIDTH, TARGET_HEIGHT))
             self._sequence_number += 1
-            self._last_frame_time = datetime.now()
+            self._last_frame_time = datetime.now(timezone.utc)
 
             current_frame = CurrentFrame(
                 image=frame,
@@ -103,6 +105,19 @@ class LatestFrameReader:
                 source_height=TARGET_HEIGHT
             )
             self.buffer.put(current_frame)
+
+    def _letterbox_resize(self, frame, target_size: tuple) -> np.ndarray:
+        """Resize frame preserving aspect ratio with letterboxing."""
+        h, w = frame.shape[:2]
+        target_w, target_h = target_size
+        scale = min(target_w / w, target_h / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        resized = cv2.resize(frame, (new_w, new_h))
+        top = (target_h - new_h) // 2
+        left = (target_w - new_w) // 2
+        bottom = target_h - new_h - top
+        right = target_w - new_w - left
+        return cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
 
     def _start_capture(self) -> None:
         """Open RTSP connection with optimized buffer settings."""

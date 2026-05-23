@@ -121,6 +121,19 @@ def test_detections_message_detection_status_unavailable() -> None:
     assert ws["detection_status"] == "unavailable"
 
 
+def test_detections_message_accepts_active_detection_statuses() -> None:
+    expected = {
+        DetectionHealthStatus.LOADING: "loading",
+        DetectionHealthStatus.ACTIVE: "active",
+        DetectionHealthStatus.STALE: "stale",
+        DetectionHealthStatus.UNAVAILABLE: "unavailable",
+    }
+
+    for status, serialized in expected.items():
+        msg = DetectionsMessage(**_valid_message(detection_status=status))
+        assert msg.to_ws_dict()["detection_status"] == serialized
+
+
 # ---------------------------------------------------------------------------
 # to_ws_dict round-trip
 # ---------------------------------------------------------------------------

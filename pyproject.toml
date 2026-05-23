@@ -21,6 +21,7 @@ dependencies = [
     "matplotlib>=3.10.9",
     "scipy>=1.17.1",
     "roboflow>=1.3.8",
+    "pandas>=3.0.3",
 ]
 
 [project.optional-dependencies]
@@ -44,11 +45,12 @@ ml = [
     "roboflow>=1.1.0",
     "scikit-learn>=1.5.0",
     "python-dotenv>=1.0.0",
+    "albumentations>=1.4.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["config*", "core*", "streaming*", "validation*", "web*"]
+include = ["config*", "core*", "pi_controller*", "streaming*", "validation*", "web*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

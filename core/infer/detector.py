@@ -12,10 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
+from config.setting import YOLO_CONFIDENCE_THRESHOLD
 from core.types import Detection, DetectionResult
-
-
-CLASS_NAMES = ("fish", "feed", "debris", "lumpfish")
 
 
 class YOLODetector:
@@ -29,8 +27,8 @@ class YOLODetector:
     def load(
         cls,
         model_path: str | Path,
-        device: str = "cuda",
-        conf_threshold: float = 0.25,
+        device: str = "cpu",
+        conf_threshold: float = YOLO_CONFIDENCE_THRESHOLD,
     ) -> "YOLODetector":
         """Load a YOLO model from `model_path` onto `device`."""
         from ultralytics import YOLO  # ml group only
@@ -39,7 +37,7 @@ class YOLODetector:
         model.to(device)
         return cls(model, conf_threshold)
 
-    def detect(self, raw_frame: np.ndarray) -> DetectionResult:
+    def detect(self, raw_frame: np.ndarray, frame_id: int = 0) -> DetectionResult:
         """Run inference on a single BGR frame and return normalized detections."""
         t0 = time.monotonic()
         results = self._model(raw_frame, conf=self._conf_threshold, verbose=False)
@@ -59,11 +57,17 @@ class YOLODetector:
                 cls_idx = int(box.cls[0].cpu())
                 cls_name = result.names.get(cls_idx, str(cls_idx))
 
-                # Normalize to [0, 1]
-                bx = max(0.0, min(1.0, x1 / w))
-                by = max(0.0, min(1.0, y1 / h))
-                bw = max(0.0, min(1.0 - bx, (x2 - x1) / w))
-                bh = max(0.0, min(1.0 - by, (y2 - y1) / h))
+                # Clip pixel coordinates before normalization so boxes crossing
+                # frame edges keep the correct visible width and height.
+                x1 = max(0.0, min(float(w), x1))
+                y1 = max(0.0, min(float(h), y1))
+                x2 = max(0.0, min(float(w), x2))
+                y2 = max(0.0, min(float(h), y2))
+
+                bx = x1 / w
+                by = y1 / h
+                bw = max(0.0, (x2 - x1) / w)
+                bh = max(0.0, (y2 - y1) / h)
 
                 detections.append(Detection(
                     class_name=cls_name,
@@ -76,7 +80,7 @@ class YOLODetector:
                 ))
 
         return DetectionResult(
-            frame_id=0,
+            frame_id=frame_id,
             captured_at=datetime.now(timezone.utc),
             source_width=w,
             source_height=h,

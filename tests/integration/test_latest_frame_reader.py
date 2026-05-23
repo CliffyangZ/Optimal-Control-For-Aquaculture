@@ -2,7 +2,7 @@
 
 import pytest
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from core.models import CurrentFrame
 from streaming.latest_frame_reader import LatestFrameReader
@@ -144,3 +144,21 @@ class TestLatestFrameReaderNoReplay:
             )
             assert frame.source_width == w
             assert frame.source_height == h
+
+    def test_reader_uses_timezone_aware_frame_timestamps(self, mock_reader):
+        """Test that live frame timestamps are UTC-aware."""
+        mock_reader._capture = MockRTSPCapture(frame_count=1)
+        mock_reader._reading = True
+
+        def stop_after_put(frame):
+            mock_reader._reading = False
+
+        mock_reader.buffer.put.side_effect = stop_after_put
+
+        with patch.object(mock_reader, "_start_capture"), patch(
+            "streaming.latest_frame_reader.cv2.resize",
+            side_effect=lambda frame, size: frame,
+        ):
+            mock_reader._read_loop()
+
+        assert mock_reader.get_last_frame_time().tzinfo == timezone.utc

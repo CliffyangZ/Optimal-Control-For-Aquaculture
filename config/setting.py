@@ -1,78 +1,64 @@
-"""Configuration constants for spatiotemporal water ripple analysis monitoring.
+"""Runtime configuration constants for aquaculture monitoring."""
 
-Includes stream source settings, spatial grid dimensions, feature fusion weights,
-optical flow and edge detection parameters, activity level thresholds, and UI settings.
-All weights must sum to 1.0 and threshold values must be in valid ranges [0, 1].
-"""
+import os
+from pathlib import Path
+from urllib.parse import urlparse
+
+
+def _load_dotenv(env_path: Path = Path(".env")) -> None:
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def _env_int(name: str, default: int) -> int:
+    return int(os.environ.get(name, str(default)))
+
+
+def _stream_source_id(stream_url: str, default: str) -> str:
+    parsed = urlparse(stream_url)
+    path = parsed.path.strip("/")
+    return path or default
+
+
+def _stream_host(stream_url: str, default: str) -> str:
+    return urlparse(stream_url).hostname or default
+
+
+_load_dotenv()
 
 # Stream Source
-STREAM_URL = "rtsp://127.0.0.1:8554/drone_live"
-TARGET_WIDTH = 1280
-TARGET_HEIGHT = 720
+DEFAULT_STREAM_URL = "rtsp://192.168.137.157:8554/cam"
+STREAM_URL = os.environ.get("STREAM_URL", DEFAULT_STREAM_URL)
+TARGET_WIDTH = 640
+TARGET_HEIGHT = 640
 TARGET_DISPLAY_FPS = 30
 TARGET_DETECTION_FPS = 10
 INTERRUPTION_TIMEOUT_SECONDS = 3
-
-# Spatial Grid
-GRID_ROWS = 8
-GRID_COLS = 8
-
-# Feature Weights (must sum to 1.0)
-WEIGHT_SPATIAL = 0.25
-WEIGHT_EXPANSION = 0.35
-WEIGHT_MOTION = 0.25
-WEIGHT_EDGE_CHANGE = 0.15
-
-# Sliding Window
-WINDOW_FRAMES = 30
-
-# Optical Flow (Farneback parameters)
-FLOW_PYR_SCALE = 0.5
-FLOW_LEVELS = 3
-FLOW_WINSIZE = 21
-FLOW_ITERATIONS = 3
-FLOW_POLY_N = 5
-FLOW_POLY_SIGMA = 1.2
-
-# Edge Detection (Canny)
-CANNY_LOW = 50
-CANNY_HIGH = 150
-BLUR_KERNEL = (5, 5)
-
-# Activity Level Thresholds
-ACTIVITY_LOW_THRESHOLD = 0.2
-ACTIVITY_HIGH_THRESHOLD = 0.5
-
-# Temporal Feature Thresholds
-MOTION_THRESHOLD = 12
-FLOW_MAG_THRESHOLD = 0.2
-FLOW_SAMPLE_STEP = 4
-RIPPLE_R_MIN = 10
-RIPPLE_R_MAX = 120
-
-# UI Settings
-HEATMAP_COLORMAP = "HOT"
-HEATMAP_ALPHA = 0.5
-
-# Legacy thresholds (for backward compatibility)
-ACTIVITY_THRESHOLDS = {
-    "low": [0, 33],
-    "medium": [34, 66],
-    "high": [67, 100],
-}
 
 VALIDATION_MANIFEST_PATH = "validation/clips.local.yml"
 LOCAL_TRUSTED_NETWORK_ONLY = True
 
 # Stream / WebRTC
-SOURCE_ID = "drone_live"
-MEDIAMTX_HOST = "127.0.0.1"
-MEDIAMTX_WEBRTC_PORT = 8889
+SOURCE_ID = os.environ.get("SOURCE_ID", _stream_source_id(STREAM_URL, "cam"))
+MEDIAMTX_HOST = os.environ.get("MEDIAMTX_HOST", _stream_host(STREAM_URL, "192.168.137.157"))
+MEDIAMTX_WEBRTC_PORT = _env_int("MEDIAMTX_WEBRTC_PORT", 8889)
 WEBRTC_PATH_TEMPLATE = "/{source_id}/whep"
 
 # Overlay / WebSocket
 STALE_OVERLAY_MS = 500
 OVERLAY_HUB_QUEUE_MAXSIZE = 1
+
+# Approved YOLO web recognition
+YOLO_MODEL_PATH = os.environ.get("YOLO_MODEL_PATH", "")
+YOLO_DEVICE = os.environ.get("YOLO_DEVICE", "cpu")
+YOLO_SUPPORTED_CLASSES = ("fish", "lumpfish", "feed", "debris")
+YOLO_CONFIDENCE_THRESHOLD = float(os.environ.get("YOLO_CONFIDENCE_THRESHOLD", "0.25"))
 
 # Viewer / session lifecycle
 VIEWER_HEARTBEAT_TIMEOUT_SECONDS = 30

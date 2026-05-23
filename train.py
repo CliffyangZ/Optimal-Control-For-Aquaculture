@@ -1,9 +1,9 @@
 """CLI entry point for the YOLO Fish & Feed Detection pipeline.
 
 Subcommands:
-    download   Download FishTracker_v2 from Roboflow and generate 5-fold splits
-    train      Train YOLO26s across folds with wandb logging
-    evaluate   Aggregate cross-fold metrics and apply the quality gate
+    download   Download FishTracker_v2 from Roboflow
+    train      Train YOLO26 with wandb logging
+    evaluate   Evaluate trained model and apply the quality gate
     infer      Run inference on an image, video, or RTSP stream
 """
 
@@ -25,7 +25,6 @@ def _cmd_download(args: argparse.Namespace) -> int:
     try:
         cache_dir = dataset.download()
         summary = dataset.validate()
-        fold_yamls = dataset.generate_kfold_splits()
     except Exception as exc:  # noqa: BLE001 — CLI surface
         print(f"[download] ERROR: {exc}", file=sys.stderr)
         return 1
@@ -34,15 +33,12 @@ def _cmd_download(args: argparse.Namespace) -> int:
         f"[download] Dataset cached: {cache_dir} "
         f"({summary.image_count} images, {len(summary.classes)} classes)"
     )
-    print(
-        f"[download] 5-fold splits generated: {fold_yamls[0].parent} "
-        f"({len(fold_yamls)} fold YAML configs)"
-    )
+    print(f"[download] data.yaml: {summary.dataset_yaml}")
     return 0
 
 
 def _cmd_evaluate(args: argparse.Namespace) -> int:
-    from core.train.evaluator import CrossFoldEvaluator
+    from core.train.evaluator import Evaluator
 
     config = load_training_config(args.config)
     # Use --runs-dir if provided, otherwise derive from config.model.output_dir
@@ -51,46 +47,49 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
     else:
         runs_dir = Path(config.model.output_dir)
 
-    # Discover fold best.pt paths: runs_dir/fold-{k}_*/weights/best.pt
-    best_pts: dict[int, Path] = {}
-    for weights_dir in sorted(runs_dir.glob("fold-*/weights")):
-        run_name = weights_dir.parent.name  # fold-0_20260517_1430
-        try:
-            k = int(run_name.split("-")[1].split("_")[0])
-        except (IndexError, ValueError):
-            continue
-        bp = weights_dir / "best.pt"
-        if bp.exists():
-            best_pts[k] = bp
-
-    if not best_pts:
+    # Find the most recent run (latest timestamp)
+    run_dirs = sorted(runs_dir.glob("run_*"))
+    if not run_dirs:
         print(
-            f"[evaluate] ERROR: no fold checkpoints found in {runs_dir}. "
+            f"[evaluate] ERROR: no training runs found in {runs_dir}. "
             f"Run `python train.py train` first.",
             file=sys.stderr,
         )
         return 1
 
-    evaluator = CrossFoldEvaluator(config.evaluation)
-    fold_metrics_list = []
+    latest_run = run_dirs[-1]
+    best_pt = latest_run / "weights" / "best.pt"
+    if not best_pt.exists():
+        print(
+            f"[evaluate] ERROR: best.pt not found at {best_pt}",
+            file=sys.stderr,
+        )
+        return 1
 
-    # Determine fold YAML paths
-    fold_output_dir = Path(config.dataset.fold_output_dir)
-    for k in sorted(best_pts):
-        model_path = best_pts[k]
-        val_yaml = fold_output_dir / f"fold_{k}.yaml"
-        if not val_yaml.exists():
-            print(
-                f"[evaluate] WARNING: fold YAML not found: {val_yaml}; skipping fold {k}",
-                file=sys.stderr,
-            )
-            continue
-        print(f"[evaluate] Evaluating fold {k} — {model_path}", flush=True)
-        fm = evaluator.evaluate_fold(k, model_path, val_yaml)
-        fold_metrics_list.append(fm)
+    # Find data.yaml for validation
+    cache_dir = Path(config.dataset.local_cache_dir)
+    data_yaml = None
+    for candidate in [cache_dir / "data.yaml", cache_dir / "dataset.yaml"]:
+        if candidate.exists():
+            data_yaml = candidate
+            break
+    if not data_yaml:
+        for p in cache_dir.rglob("data.yaml"):
+            data_yaml = p
+            break
 
-    report = evaluator.aggregate(fold_metrics_list)
-    report_path = runs_dir.parent / "cv_report.json"
+    if not data_yaml or not data_yaml.exists():
+        print(
+            f"[evaluate] ERROR: data.yaml not found in {cache_dir}",
+            file=sys.stderr,
+        )
+        return 1
+
+    evaluator = Evaluator(config.evaluation)
+    print(f"[evaluate] Evaluating — {best_pt}", flush=True)
+    report = evaluator.evaluate(best_pt, data_yaml)
+
+    report_path = runs_dir.parent / "evaluation_report.json"
     evaluator.write_report(report, report_path)
     return 0
 
@@ -146,7 +145,7 @@ def _cmd_infer(args: argparse.Namespace) -> int:
             if not ret:
                 break
             frame_id += 1
-            result = detector.detect(frame)
+            result = detector.detect(frame, frame_id=frame_id)
 
             # Draw detections on frame
             for det in result.detections:
@@ -194,30 +193,49 @@ def _cmd_infer(args: argparse.Namespace) -> int:
 
 def _cmd_train(args: argparse.Namespace) -> int:
     from core.train.callbacks import setup_wandb_mode
-    from core.train.trainer import FoldTrainer
+    from core.train.trainer import Trainer
 
     config = load_training_config(args.config)
     setup_wandb_mode(config.wandb, disabled=args.no_wandb)
 
-    trainer = FoldTrainer(config, project_root=Path.cwd())
+    # Find data.yaml in the local cache directory
+    cache_dir = Path(config.dataset.local_cache_dir)
+    if not cache_dir.exists():
+        print(
+            f"[train] ERROR: dataset cache not found: {cache_dir}. "
+            f"Run `python train.py download` first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Look for data.yaml in the cache directory (Roboflow's data structure)
+    data_yaml = None
+    for candidate in [cache_dir / "data.yaml", cache_dir / "dataset.yaml"]:
+        if candidate.exists():
+            data_yaml = candidate
+            break
+    if not data_yaml:
+        # Search recursively as Roboflow sometimes nests it
+        for p in cache_dir.rglob("data.yaml"):
+            data_yaml = p
+            break
+
+    if not data_yaml or not data_yaml.exists():
+        print(
+            f"[train] ERROR: data.yaml not found in {cache_dir}. "
+            f"Run `python train.py download` first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    trainer = Trainer(config, project_root=Path.cwd())
     try:
-        if args.fold is not None:
-            fold_yaml = Path(config.dataset.fold_output_dir) / f"fold_{args.fold}.yaml"
-            if not fold_yaml.exists():
-                print(
-                    f"[train] ERROR: fold YAML not found: {fold_yaml}. "
-                    f"Run `python train.py download` first.",
-                    file=sys.stderr,
-                )
-                return 1
-            trainer.train_fold(args.fold, fold_yaml)
-        else:
-            trainer.train_all_folds()
+        trainer.train(data_yaml)
     except Exception as exc:  # noqa: BLE001 — CLI surface
         print(f"[train] ERROR: {exc}", file=sys.stderr)
         return 2
 
-    print("[train] All folds complete. Run `python train.py evaluate` for cross-fold report.")
+    print("[train] Training complete. Run `python train.py evaluate` to evaluate the model.")
     return 0
 
 
@@ -225,25 +243,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="train.py", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_dl = sub.add_parser("download", help="Download dataset + generate 5-fold splits")
+    p_dl = sub.add_parser("download", help="Download dataset from Roboflow")
     p_dl.add_argument("--config", type=Path, default=Path("config/training.yaml"))
     p_dl.set_defaults(func=_cmd_download)
 
-    p_tr = sub.add_parser("train", help="Train YOLO26s across folds with wandb")
+    p_tr = sub.add_parser("train", help="Train YOLO26 with wandb logging")
     p_tr.add_argument("--config", type=Path, default=Path("config/training.yaml"))
-    p_tr.add_argument(
-        "--fold",
-        type=int,
-        choices=range(0, 5),
-        default=None,
-        help="Run a single fold (0–4); omit to run all 5",
-    )
     p_tr.add_argument(
         "--no-wandb", action="store_true", help="Disable wandb logging entirely"
     )
     p_tr.set_defaults(func=_cmd_train)
 
-    p_ev = sub.add_parser("evaluate", help="Aggregate cross-fold metrics + quality gate")
+    p_ev = sub.add_parser("evaluate", help="Evaluate model and apply quality gate")
     p_ev.add_argument("--config", type=Path, default=Path("config/training.yaml"))
     p_ev.add_argument("--runs-dir", type=Path, default=None, help="Override output directory (default: from config)")
     p_ev.set_defaults(func=_cmd_evaluate)
@@ -252,7 +263,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_in.add_argument("--model", type=Path, required=True, help="Path to .pt weights file")
     p_in.add_argument("--source", type=str, required=True, help="Image path, video path, or RTSP URL")
     p_in.add_argument("--output", type=str, default=None, help="Output video path (optional; if not provided, only JSON output)")
-    p_in.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
+    p_in.add_argument("--conf", type=float, default=0.70, help="Confidence threshold")
     p_in.add_argument("--device", type=str, default="cuda", help="Inference device (cuda/cpu/0)")
     p_in.set_defaults(func=_cmd_infer)
 

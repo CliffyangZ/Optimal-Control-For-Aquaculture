@@ -5,10 +5,11 @@ export type StreamStatus =
   | 'reconnecting'
   | 'stream_unavailable'
   | 'degraded'
+  | 'error'
 
-export type DetectionStatus = 'ok' | 'delayed' | 'degraded' | 'unavailable'
+export type DetectionStatus = 'loading' | 'active' | 'stale' | 'unavailable'
 
-export type ActivityLevel = 'Low' | 'Medium' | 'High'
+export type DetectionClassName = 'fish' | 'lumpfish' | 'feed' | 'debris'
 
 export interface RuntimeConfig {
   source_id: string
@@ -31,23 +32,18 @@ export interface SessionStatus {
   message: string | null
 }
 
-export interface ActivityBadge {
-  level: ActivityLevel
-  score: number
+export interface DetectionPayload {
+  class_name: DetectionClassName
   confidence: number
-}
-
-export interface OverlayRegion {
-  id: string
   x: number
   y: number
   width: number
   height: number
 }
 
-export interface OverlayMessage {
-  schema: 'overlay.v1'
-  type: 'overlay'
+export interface DetectionsMessage {
+  schema: 'detections.v1'
+  type: 'detections'
   source_id: string
   frame_id: number
   timestamp_ms: number
@@ -55,8 +51,7 @@ export interface OverlayMessage {
   source_height: number
   stream_status: StreamStatus
   detection_status: DetectionStatus
-  activity: ActivityBadge | null
-  regions: OverlayRegion[]
+  detections: DetectionPayload[]
   message: string | null
 }
 
@@ -71,4 +66,4 @@ export interface StatusWsMessage {
   message: string | null
 }
 
-export type WsServerMessage = OverlayMessage | StatusWsMessage
+export type WsServerMessage = DetectionsMessage | StatusWsMessage

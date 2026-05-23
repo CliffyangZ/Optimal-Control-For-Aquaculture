@@ -34,9 +34,10 @@ export function MonitoringControls({
         <button
           className="btn btn-overlay-toggle"
           onClick={onToggleOverlay}
-          title={overlayEnabled ? 'Hide overlays' : 'Show overlays'}
+          aria-label={overlayEnabled ? 'Hide detection overlay boxes' : 'Show detection overlay boxes'}
+          title={overlayEnabled ? 'Hide detection boxes' : 'Show detection boxes'}
         >
-          {overlayEnabled ? 'Hide Overlays' : 'Show Overlays'}
+          {overlayEnabled ? 'Hide Boxes' : 'Show Boxes'}
         </button>
       )}
     </div>

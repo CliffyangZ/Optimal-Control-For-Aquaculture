@@ -51,6 +51,15 @@ class DetectionWindow:
         return total / len(self._frames)
 
     @property
+    def is_ready(self) -> bool:
+        """True once the window holds at least half its capacity of frames.
+
+        Callers can gate feeding decisions on this to avoid acting on a single
+        noisy frame at cold-start.
+        """
+        return len(self._frames) >= max(1, self.max_frames // 2)
+
+    @property
     def fish_presence(self) -> bool:
         """True if any `fish` or `lumpfish` was detected in any frame in the window."""
         return any(

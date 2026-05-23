@@ -1,16 +1,22 @@
 import { useEffect, useState } from 'react'
-import type { OverlayMessage, OverlayRegion } from '../types/streaming'
+import type { DetectionPayload, DetectionsMessage } from '../types/streaming'
 
 interface OverlayLayerProps {
-  overlay: OverlayMessage
+  overlay: DetectionsMessage
   videoRef: React.RefObject<HTMLVideoElement | null>
   staleMs: number
+}
+
+const CLASS_LABEL_COLOR: Record<DetectionPayload['class_name'], string> = {
+  fish: '#38bdf8',
+  lumpfish: '#22d3ee',
+  feed: '#f59e0b',
+  debris: '#f87171',
 }
 
 export function OverlayLayer({ overlay, videoRef, staleMs }: OverlayLayerProps) {
   const [videoRect, setVideoRect] = useState<DOMRect | null>(null)
 
-  // Track rendered video content rect (letterboxing aware)
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
@@ -47,16 +53,19 @@ export function OverlayLayer({ overlay, videoRef, staleMs }: OverlayLayerProps) 
     return () => observer.disconnect()
   }, [videoRef, overlay.source_width, overlay.source_height])
 
-  const isStale = Date.now() - overlay.timestamp_ms > staleMs
-  if (isStale || !videoRect || overlay.regions.length === 0) return null
+  const isStale = Date.now() - overlay.timestamp_ms > staleMs || overlay.detection_status === 'stale'
+  if (isStale || !videoRect || overlay.detections.length === 0) return null
 
   return (
-    <svg className="overlay-svg" viewBox={`0 0 ${videoRect.width} ${videoRect.height}`}
-      style={{ left: videoRect.x, top: videoRect.y, width: videoRect.width, height: videoRect.height, position: 'absolute' }}>
-      {overlay.regions.map((region) => (
-        <OverlayRegionBox
-          key={region.id}
-          region={region}
+    <svg
+      className="overlay-svg"
+      viewBox={`0 0 ${videoRect.width} ${videoRect.height}`}
+      style={{ left: videoRect.x, top: videoRect.y, width: videoRect.width, height: videoRect.height, position: 'absolute' }}
+    >
+      {overlay.detections.map((detection, index) => (
+        <DetectionBox
+          key={`${detection.class_name}-${index}-${detection.x}-${detection.y}`}
+          detection={detection}
           width={videoRect.width}
           height={videoRect.height}
         />
@@ -65,30 +74,20 @@ export function OverlayLayer({ overlay, videoRef, staleMs }: OverlayLayerProps) 
   )
 }
 
-function OverlayRegionBox({
-  region,
-  width,
-  height,
-}: {
-  region: OverlayRegion
-  width: number
-  height: number
-}) {
-  const x = region.x * width
-  const y = region.y * height
-  const w = region.width * width
-  const h = region.height * height
+function DetectionBox({ detection, width, height }: { detection: DetectionPayload; width: number; height: number }) {
+  const x = detection.x * width
+  const y = detection.y * height
+  const w = detection.width * width
+  const h = detection.height * height
+  const color = CLASS_LABEL_COLOR[detection.class_name]
+  const label = `${detection.class_name} ${Math.round(detection.confidence * 100)}%`
+
   return (
     <g>
-      <rect
-        className="overlay-region"
-        x={x}
-        y={y}
-        width={w}
-        height={h}
-      />
-      <text className="overlay-region-label" x={x + 4} y={y - 4}>
-        {region.id}
+      <rect className="overlay-detection" x={x} y={y} width={w} height={h} stroke={color} />
+      <rect className="overlay-detection-label-bg" x={x} y={Math.max(0, y - 22)} width={Math.max(72, label.length * 7)} height={18} fill={color} />
+      <text className="overlay-detection-label" x={x + 5} y={Math.max(13, y - 9)}>
+        {label}
       </text>
     </g>
   )

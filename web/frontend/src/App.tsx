@@ -32,7 +32,7 @@ export default function App() {
     enabled: isMonitoring,
   })
 
-  const { latestOverlay } = useOverlaySocket({
+  const { latestDetections } = useOverlaySocket({
     wsUrl: isMonitoring && config ? config.overlay_ws_url : null,
     viewerId: viewerId ?? '',
     enabled: isMonitoring,
@@ -43,9 +43,13 @@ export default function App() {
         stream_status: msg.stream_status,
         detection_status: msg.detection_status,
         active_viewer_count: msg.active_viewer_count,
+        message: msg.message,
       } : prev)
     },
   })
+
+  const effectiveStreamStatus: StreamStatus = latestDetections?.stream_status ?? streamStatus
+  const effectiveDetectionStatus: DetectionStatus = latestDetections?.detection_status ?? detectionStatus
 
   // Load config on mount
   useEffect(() => {
@@ -73,7 +77,7 @@ export default function App() {
     setIsLoading(true)
     try {
       const s = await startSession()
-      setViewerId(s.viewer_id || null)
+      setViewerId(parseViewerId(s.message))
       setSession(s)
       setIsMonitoring(true)
     } catch (err) {
@@ -114,10 +118,10 @@ export default function App() {
 
       <main className="app-main">
         <div className="video-area">
-          <VideoStage ref={videoRef} rtcState={rtcState} streamStatus={streamStatus}>
-            {overlayEnabled && latestOverlay && (
+          <VideoStage ref={videoRef} rtcState={rtcState} streamStatus={effectiveStreamStatus}>
+            {overlayEnabled && latestDetections && (
               <OverlayLayer
-                overlay={latestOverlay}
+                overlay={latestDetections}
                 videoRef={videoRef}
                 staleMs={config?.stale_overlay_ms ?? 500}
               />
@@ -127,17 +131,25 @@ export default function App() {
 
         <aside className="app-sidebar">
           <StatusPanel
-            streamStatus={streamStatus}
-            detectionStatus={detectionStatus}
+            streamStatus={effectiveStreamStatus}
+            detectionStatus={effectiveDetectionStatus}
             rtcState={rtcState}
             rtcError={rtcError}
             activeViewerCount={activeViewerCount}
           />
-          {latestOverlay?.activity && (
-            <DetectionPanel overlay={latestOverlay} staleMs={config?.stale_overlay_ms ?? 500} />
-          )}
+          <DetectionPanel
+            overlay={latestDetections}
+            staleMs={config?.stale_overlay_ms ?? 500}
+            detectionStatus={effectiveDetectionStatus}
+            statusMessage={session?.message}
+          />
         </aside>
       </main>
     </div>
   )
+}
+
+function parseViewerId(message: string | null): string | null {
+  if (!message?.startsWith('viewer_id:')) return null
+  return message.slice('viewer_id:'.length)
 }

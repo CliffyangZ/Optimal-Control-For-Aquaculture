@@ -3,23 +3,52 @@ dataset:
   roboflow_project: fishtracker_v2
   roboflow_version: 1
   roboflow_format: yolo26
-  local_cache_dir: data/datasets/fishtracker_v2
-  n_folds: 5
-  fold_output_dir: data/kfold
+  local_cache_dir: data/datasets/combined
 
 model:
   weights: yolo26s.pt
   variant: yolo26s
   output_dir: runs/train
-  epochs: 100
-  batch: 8
-  imgsz: 640
+  epochs: 300
+  batch: 16
+  imgsz: 832
   workers: 4
-  mosaic: 1.0
-  close_mosaic: 10
-  mixup: 0.1
-  patience: 50
-  seed: 42
+  # 優化的訓練策略
+  mosaic: 1.0         # 馬賽克增強強度
+  close_mosaic: 10    # 最後 10 個 epoch 關閉 mosaic
+  mixup: 0.2          # 混合增強強度
+  patience: 50        # 早停耐心值
+  seed: 42            # 隨機種子（可重複性）
+
+  # 優化的訓練參數
+  optimizer: "SGD"    # 優化器選擇 (SGD / Adam)
+  lr0: 0.01           # 初始學習率
+  lrf: 0.01           # 最終學習率（相對於初始值）
+  momentum: 0.937     # 動量（用於 SGD）
+  weight_decay: 0.0005 # L2 正則化
+  warmup_epochs: 3    # 預熱 epoch 數
+  warmup_momentum: 0.8 # 預熱動量
+
+  # 類別不平衡處理
+  auto_weight: True   # 自動計算類別權重（重要！）
+
+  # 驗證策略
+  noval: False        # 跳過驗證
+  save_period: 10     # 每 10 個 epoch 保存一次
+  save: True          # 保存檢查點
+  # Data augmentation
+  # 優化的數據增強（針對水族館場景）
+  hsv_h: 0.020        # 色調增加（水的顏色變化）
+  hsv_s: 0.8          # 飽和度增加（更強的顏色變化）
+  hsv_v: 0.5          # 亮度增加（水下光線變化）
+  degrees: 15.0       # 增加旋轉範圍
+  translate: 0.15     # 增加平移
+  scale: 0.6          # 增加縮放
+  flipud: 0.2         # 增加垂直翻轉
+  fliplr: 0.5         # 保持水平翻轉
+  perspective: 0.001  # 新增：透視變換
+  erasing: 0.1        # 新增：隨機擦除（模擬遮擋）
+  copy_paste: 0.0     # 新增：複製粘貼增強
 
 wandb:
   project: Aqua_CV_Project

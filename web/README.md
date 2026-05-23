@@ -2,6 +2,10 @@
 
 FastAPI backend and React/Vite frontend for low-latency aquaculture monitoring.
 
+The active recognition path is approved YOLO object detection delivered through the compatibility overlay WebSocket as `detections.v1` messages. Configure `YOLO_MODEL_PATH` explicitly; missing or failed model loading reports unavailable recognition and does not fall back to legacy detection.
+
+Compatibility names are retained for API stability: `overlay_ws_url` is the detection WebSocket URL, `last_overlay_at` is the latest detection payload timestamp, and `stale_overlay_ms` is the detection freshness window.
+
 ## Normal operator flow
 
 ```bash
@@ -15,7 +19,8 @@ npm run build
 cd ../..
 
 # 3. Start the FastAPI backend
-uvicorn web.app:app --host 0.0.0.0 --port 8000
+export YOLO_MODEL_PATH=/absolute/path/to/approved-model.pt
+uv run --group ml uvicorn web.app:app --host 0.0.0.0 --port 8000
 
 # 4. Open http://localhost:8000 in Chrome or Edge
 ```

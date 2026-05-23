@@ -2,6 +2,7 @@
 
 import sys
 import importlib.util
+from pathlib import Path
 
 
 class TestModuleBoundaries:
@@ -11,7 +12,7 @@ class TestModuleBoundaries:
         """Verify core module does not import from web."""
         core_modules = [
             'core.models',
-            'core.activity_levels'
+            'core.types',
         ]
 
         for module_name in core_modules:
@@ -28,7 +29,7 @@ class TestModuleBoundaries:
         """Verify core module does not import from streaming."""
         core_modules = [
             'core.models',
-            'core.activity_levels'
+            'core.types',
         ]
 
         for module_name in core_modules:
@@ -44,13 +45,13 @@ class TestModuleBoundaries:
     def test_core_dependencies_minimal(self):
         """Verify core depends only on standard library and approved packages."""
         allowed_imports = {
-            'dataclasses', 'enum', 'typing', 'datetime', 'numpy',
+            '__future__', 'dataclasses', 'enum', 'typing', 'datetime', 'numpy',
             'config', 'core'
         }
 
         core_modules = [
             'core.models',
-            'core.activity_levels'
+            'core.types',
         ]
 
         for module_name in core_modules:
@@ -70,3 +71,16 @@ class TestModuleBoundaries:
                         first_word = parts[1].split('.')[0]
                         if first_word and first_word not in allowed_imports:
                             raise AssertionError(f"{module_name} imports forbidden module: {first_word}")
+
+    def test_active_web_modules_do_not_import_legacy_detection_modules(self):
+        forbidden = ("ripple", "activity", "heatmap", "spatiotemporal")
+        active_modules = [
+            Path("web/app.py"),
+            Path("web/detection_worker.py"),
+            Path("web/schemas.py"),
+        ]
+
+        for path in active_modules:
+            content = path.read_text(encoding="utf-8").lower()
+            for term in forbidden:
+                assert term not in content, f"{path} contains legacy detection term: {term}"

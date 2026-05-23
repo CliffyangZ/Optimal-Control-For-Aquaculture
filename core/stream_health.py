@@ -33,12 +33,14 @@ def derive_detection_status(
     last_overlay_at: Optional[datetime],
     last_frame_at: Optional[datetime],
     stale_seconds: float = 2.0,
+    detector_available: bool = True,
+    loading: bool = False,
 ) -> DetectionHealthStatus:
-    if last_frame_at is None or last_overlay_at is None:
+    if not detector_available:
         return DetectionHealthStatus.UNAVAILABLE
+    if loading or last_frame_at is None or last_overlay_at is None:
+        return DetectionHealthStatus.LOADING
     age = (_utc_now_matching(last_overlay_at) - last_overlay_at).total_seconds()
     if age <= stale_seconds:
-        return DetectionHealthStatus.OK
-    if age <= stale_seconds * 5:
-        return DetectionHealthStatus.DELAYED
-    return DetectionHealthStatus.DEGRADED
+        return DetectionHealthStatus.ACTIVE
+    return DetectionHealthStatus.STALE

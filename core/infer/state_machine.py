@@ -29,6 +29,8 @@ class FeedingConfig:
     wait_timer_s: float = 30.0
     # Any → ALERT when last_detection_age_s exceeds this
     camera_failure_timeout_s: float = 10.0
+    # DISPENSE → WAITING after this many seconds (how long the feeder motor runs)
+    dispense_duration_s: float = 2.0
 
 
 class FeedingStateMachine:
@@ -52,6 +54,10 @@ class FeedingStateMachine:
         if self._state == FeedingState.IDLE:
             self._transition(FeedingState.PRECHECK)
         return None
+
+    def reset(self) -> None:
+        """Reset to IDLE so a new feeding cycle can begin after DONE or ALERT."""
+        self._transition(FeedingState.IDLE)
 
     def _transition(self, new_state: FeedingState) -> None:
         self._state = new_state
@@ -95,9 +101,11 @@ class FeedingStateMachine:
                 return None
 
         if state == FeedingState.DISPENSE:
-            # Dispense command was sent on transition in; move to WAITING immediately
-            self._transition(FeedingState.WAITING)
-            return BMduinoCommand.STOP
+            # Hold DISPENSE until the motor has run for dispense_duration_s, then stop.
+            if self._time_in_state() >= self.config.dispense_duration_s:
+                self._transition(FeedingState.WAITING)
+                return BMduinoCommand.STOP
+            return None
 
         if state == FeedingState.WAITING:
             if self._time_in_state() >= self.config.wait_timer_s:

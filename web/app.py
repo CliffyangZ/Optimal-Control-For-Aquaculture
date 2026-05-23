@@ -75,6 +75,7 @@ def _build_config(request: Request) -> RuntimeConfigResponse:
 
 
 def _session_to_response(message: Optional[str] = None) -> SessionStatusResponse:
+    response_message = message if message is not None else detection_worker.status_message
     session = detection_worker.get_session_snapshot()
     if session is None:
         return SessionStatusResponse(
@@ -82,7 +83,7 @@ def _session_to_response(message: Optional[str] = None) -> SessionStatusResponse
             stream_status=StreamStatus.WAITING,
             detection_status=DetectionHealthStatus.UNAVAILABLE,
             active_viewer_count=0,
-            message=message,
+            message=response_message,
         )
     return SessionStatusResponse(
         source_id=session.source_id,
@@ -93,7 +94,7 @@ def _session_to_response(message: Optional[str] = None) -> SessionStatusResponse
         last_frame_at=session.last_frame_at.isoformat() if session.last_frame_at else None,
         last_overlay_at=session.last_overlay_at.isoformat() if session.last_overlay_at else None,
         detection_fps=session.detection_fps,
-        message=message,
+        message=response_message,
     )
 
 

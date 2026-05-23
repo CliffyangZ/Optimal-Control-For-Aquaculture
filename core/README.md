@@ -1,3 +1,3 @@
 # Core Module
 
-Core computer vision and ripple detection algorithms for aquaculture monitoring.
+Core computer vision models, stream health helpers, and YOLO detection types for aquaculture monitoring.

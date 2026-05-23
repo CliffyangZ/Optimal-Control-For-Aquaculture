@@ -228,20 +228,21 @@ body {
 }
 
 .status-badge--live,
-.status-badge--ok {
+.status-badge--active {
   background: #14532d;
   color: var(--color-success);
 }
 
 .status-badge--connecting,
 .status-badge--reconnecting,
-.status-badge--delayed {
+.status-badge--degraded,
+.status-badge--loading,
+.status-badge--stale {
   background: #431407;
   color: var(--color-warn);
 }
 
 .status-badge--stream_unavailable,
-.status-badge--degraded,
 .status-badge--unavailable,
 .status-badge--error {
   background: #450a0a;
@@ -293,17 +294,20 @@ body {
   color: var(--color-text-muted);
 }
 
-.detection-panel__badge {
-  font-size: 1.1rem;
-  font-weight: 700;
+.detection-panel__summary {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
 }
 
-.detection-panel__badge--low { color: var(--color-success); }
-.detection-panel__badge--medium { color: var(--color-warn); }
-.detection-panel__badge--high { color: var(--color-danger); }
-
-.detection-panel__score {
+.detection-panel__summary-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
   font-size: 0.85rem;
+}
+
+.detection-panel__summary-item span {
   color: var(--color-text-muted);
 }
 
@@ -317,15 +321,19 @@ body {
   pointer-events: none;
 }
 
-.overlay-region {
+.overlay-detection {
   fill: none;
-  stroke: #38bdf8;
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
 }
 
-.overlay-region-label {
-  fill: #38bdf8;
+.overlay-detection-label {
+  fill: #020617;
   font-size: 12px;
   font-family: system-ui, sans-serif;
+  font-weight: 700;
+}
+
+.overlay-detection-label-bg {
+  opacity: 0.9;
 }

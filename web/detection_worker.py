@@ -1,6 +1,7 @@
 """Shared detection worker lifecycle for one configured stream."""
 
 import asyncio
+import functools
 import logging
 import os
 import time
@@ -15,6 +16,9 @@ from config.setting import (
     VIEWER_HEARTBEAT_TIMEOUT_SECONDS,
     IDLE_SHUTDOWN_DELAY_SECONDS,
     STALE_OVERLAY_MS,
+    YOLO_CONFIDENCE_THRESHOLD,
+    YOLO_DEVICE,
+    YOLO_SUPPORTED_CLASSES,
 )
 from core.models import (
     DetectionHealthStatus,
@@ -25,12 +29,14 @@ from core.models import (
     ViewerState,
 )
 from core.stream_health import derive_detection_status, derive_stream_status
-from core.types import DetectionResult
+from core.types import Detection, DetectionResult
 from streaming.latest_frame_reader import LatestFrameReader
 from web.overlay_hub import overlay_hub
 from web.schemas import DetectionsMessage, DetectionPayload, StatusMessage
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
+
+DETECTION_STREAM_UNAVAILABLE_MESSAGE = "Detection stream unavailable"
 
 
 class DetectionWorker:
@@ -50,7 +56,10 @@ class DetectionWorker:
         self._frame_reader: Optional[LatestFrameReader] = None
         self._detector = None  # YOLODetector; loaded lazily in _start_worker
         self._frame_counter = 0
-        self._detection_times: list[float] = []
+        self._overlay_intervals: list[float] = []
+        self._last_overlay_monotonic: Optional[float] = None
+        self._last_processed_frame_id: Optional[int] = None
+        self._status_message: Optional[str] = None
 
     # --- Public API ---
 
@@ -76,7 +85,7 @@ class DetectionWorker:
                     source_id=SOURCE_ID,
                     started_at=now,
                     stream_status=StreamStatus.CONNECTING,
-                    detection_status=DetectionHealthStatus.UNAVAILABLE,
+                    detection_status=DetectionHealthStatus.LOADING,
                 )
                 self._start_worker()
             self._session.active_viewer_count = len(self._active_viewers())
@@ -100,6 +109,10 @@ class DetectionWorker:
     def get_session_snapshot(self) -> Optional[LiveStreamSession]:
         return self._session
 
+    @property
+    def status_message(self) -> Optional[str]:
+        return self._status_message
+
     # --- Internal helpers ---
 
     def _active_viewers(self) -> list[ViewerSession]:
@@ -107,22 +120,139 @@ class DetectionWorker:
 
     def _start_worker(self) -> None:
         if self._worker_task is None or self._worker_task.done():
+            self._reset_runtime_metrics()
             self._frame_reader = LatestFrameReader(STREAM_URL)
             self._frame_reader.start()
-            # Load YOLODetector if a model path is configured
-            model_path = os.environ.get("YOLO_MODEL_PATH", "")
-            if model_path and self._detector is None:
-                try:
-                    from core.infer.detector import YOLODetector
-                    device = os.environ.get("YOLO_DEVICE", "cpu")
-                    self._detector = YOLODetector.load(model_path, device=device)
-                    logger.info("detection_worker: loaded YOLODetector from %s on %s", model_path, device)
-                except Exception:
-                    logger.exception("detection_worker: failed to load YOLODetector; running without detector")
             self._worker_task = asyncio.create_task(self._run())
+            # _load_detector() is invoked at the top of _run() via run_in_executor
+            # so model loading never blocks the event loop
+
+    def _reset_runtime_metrics(self) -> None:
+        self._frame_counter = 0
+        self._overlay_intervals.clear()
+        self._last_overlay_monotonic = None
+        self._last_processed_frame_id = None
+
+    def _configured_model_path(self) -> str:
+        return os.environ.get("YOLO_MODEL_PATH", "").strip()
+
+    def _configured_device(self) -> str:
+        return os.environ.get("YOLO_DEVICE", YOLO_DEVICE).strip() or "cpu"
+
+    def _set_detection_state(self, status: DetectionHealthStatus, message: Optional[str] = None) -> None:
+        self._status_message = message
+        if self._session:
+            self._session.detection_status = status
+
+    def _sync_detection_state_for_frame_source(self, has_frame: bool) -> None:
+        if self._session is None or self._detector is None:
+            return
+        if has_frame:
+            if self._status_message == DETECTION_STREAM_UNAVAILABLE_MESSAGE:
+                self._set_detection_state(DetectionHealthStatus.LOADING)
+            return
+        if self._session.stream_status == StreamStatus.STREAM_UNAVAILABLE:
+            self._set_detection_state(
+                DetectionHealthStatus.UNAVAILABLE,
+                DETECTION_STREAM_UNAVAILABLE_MESSAGE,
+            )
+
+    def _refresh_detection_state(self, last_frame_at: Optional[datetime]) -> None:
+        if self._session is None or self._detector is None:
+            return
+        if self._session.stream_status == StreamStatus.STREAM_UNAVAILABLE:
+            self._set_detection_state(
+                DetectionHealthStatus.UNAVAILABLE,
+                DETECTION_STREAM_UNAVAILABLE_MESSAGE,
+            )
+            return
+        if (
+            self._session.detection_status == DetectionHealthStatus.UNAVAILABLE
+            and self._status_message != DETECTION_STREAM_UNAVAILABLE_MESSAGE
+        ):
+            return
+        self._session.detection_status = derive_detection_status(
+            last_overlay_at=self._session.last_overlay_at,
+            last_frame_at=last_frame_at,
+            stale_seconds=STALE_OVERLAY_MS / 1000,
+        )
+
+    def _record_overlay_timing(self, overlay_monotonic: float) -> None:
+        if self._session is None:
+            return
+        if self._last_overlay_monotonic is not None:
+            interval = overlay_monotonic - self._last_overlay_monotonic
+            if interval > 0:
+                self._overlay_intervals.append(interval)
+                if len(self._overlay_intervals) > 30:
+                    self._overlay_intervals.pop(0)
+        self._last_overlay_monotonic = overlay_monotonic
+
+        if self._overlay_intervals:
+            avg_interval = sum(self._overlay_intervals) / len(self._overlay_intervals)
+            self._session.detection_fps = round(1.0 / avg_interval, 1) if avg_interval > 0 else 0.0
+
+    def _should_process_frame(self, frame_id: int) -> bool:
+        if self._last_processed_frame_id == frame_id:
+            return False
+        self._last_processed_frame_id = frame_id
+        return True
+
+    def _load_detector(self) -> None:
+        if self._detector is not None:
+            self._set_detection_state(DetectionHealthStatus.ACTIVE)
+            return
+
+        model_path = self._configured_model_path()
+        if not model_path:
+            self._set_detection_state(
+                DetectionHealthStatus.UNAVAILABLE,
+                "Detection model unavailable",
+            )
+            logger.warning("detection_worker: YOLO_MODEL_PATH is not configured; no fallback detector will be used")
+            return
+
+        device = self._configured_device()
+        self._set_detection_state(DetectionHealthStatus.LOADING, "Loading detection model")
+        try:
+            from core.infer.detector import YOLODetector
+
+            logger.info(
+                "detection_worker: loading YOLODetector model_path=%s device=%s conf_threshold=%.3f",
+                model_path,
+                device,
+                YOLO_CONFIDENCE_THRESHOLD,
+            )
+            self._detector = YOLODetector.load(
+                model_path,
+                device=device,
+                conf_threshold=YOLO_CONFIDENCE_THRESHOLD,
+            )
+            self._set_detection_state(DetectionHealthStatus.ACTIVE)
+            logger.info(
+                "detection_worker: loaded YOLODetector model_path=%s device=%s",
+                model_path,
+                device,
+            )
+        except Exception:
+            self._detector = None
+            self._set_detection_state(
+                DetectionHealthStatus.UNAVAILABLE,
+                "Detection model unavailable",
+            )
+            logger.exception(
+                "detection_worker: failed to load YOLODetector model_path=%s device=%s",
+                model_path,
+                device,
+            )
 
     async def _run(self) -> None:
         logger.info("detection_worker: started for source=%s", SOURCE_ID)
+        loop = asyncio.get_running_loop()
+
+        # Load model in thread pool so the event loop stays responsive during init
+        await loop.run_in_executor(None, self._load_detector)
+
         detection_interval = 1.0 / TARGET_DETECTION_FPS if TARGET_DETECTION_FPS > 0 else 0.1
         idle_since: Optional[float] = None
 
@@ -170,10 +300,14 @@ class DetectionWorker:
                     )
 
                 if raw_frame is None:
+                    self._sync_detection_state_for_frame_source(has_frame=False)
+                    self._refresh_detection_state(last_frame_time)
                     await self._broadcast_status()
                     elapsed = time.monotonic() - loop_start
                     await asyncio.sleep(max(0, detection_interval - elapsed))
                     continue
+
+                self._sync_detection_state_for_frame_source(has_frame=True)
 
                 self._frame_counter += 1
                 video_frame = VideoFrame(
@@ -190,28 +324,50 @@ class DetectionWorker:
                     await asyncio.sleep(max(0, detection_interval - elapsed))
                     continue
 
-                # Run YOLO inference (offload to thread executor to avoid blocking event loop)
-                loop = asyncio.get_event_loop()
-                t0 = time.monotonic()
-                result: DetectionResult = await loop.run_in_executor(
-                    None, self._detector.detect, raw_frame.image
-                )
-                result.frame_id = video_frame.frame_id
+                if not self._should_process_frame(video_frame.frame_id):
+                    self._refresh_detection_state(last_frame_time)
+                    await self._broadcast_status()
+                    elapsed = time.monotonic() - loop_start
+                    await asyncio.sleep(max(0, detection_interval - elapsed))
+                    continue
+
+                # Run YOLO inference in thread pool to avoid blocking event loop
+                try:
+                    detect_fn = functools.partial(
+                        self._detector.detect,
+                        video_frame.image,
+                        frame_id=video_frame.frame_id,
+                    )
+                    result: DetectionResult = await loop.run_in_executor(None, detect_fn)
+                except Exception:
+                    self._detector = None
+                    self._set_detection_state(
+                        DetectionHealthStatus.UNAVAILABLE,
+                        "Detection model unavailable",
+                    )
+                    logger.exception("detection_worker: YOLO inference failed")
+                    await self._broadcast_status()
+                    elapsed = time.monotonic() - loop_start
+                    await asyncio.sleep(max(0, detection_interval - elapsed))
+                    continue
+                # Override captured_at with the frame's acquisition time, not inference time
                 result.captured_at = video_frame.captured_at
-                detection_time = time.monotonic() - t0
-                self._detection_times.append(detection_time)
-                if len(self._detection_times) > 30:
-                    self._detection_times.pop(0)
+                result.detections = self._validated_detections(result.detections)
+                if self._session and self._session.detection_status == DetectionHealthStatus.UNAVAILABLE:
+                    await self._broadcast_status()
+                    elapsed = time.monotonic() - loop_start
+                    await asyncio.sleep(max(0, detection_interval - elapsed))
+                    continue
 
                 now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
                 if self._session:
                     self._session.last_overlay_at = datetime.now(timezone.utc)
-                    avg_dt = sum(self._detection_times) / len(self._detection_times) if self._detection_times else 0
-                    self._session.detection_fps = round(1.0 / avg_dt, 1) if avg_dt > 0 else 0.0
+                    self._record_overlay_timing(time.monotonic())
                     self._session.detection_status = derive_detection_status(
                         last_overlay_at=self._session.last_overlay_at,
                         last_frame_at=last_frame_time,
+                        stale_seconds=STALE_OVERLAY_MS / 1000,
                     )
 
                 await self._broadcast_overlay(video_frame, result, now_ms)
@@ -255,6 +411,18 @@ class DetectionWorker:
         )
         overlay_hub.broadcast(msg.to_ws_dict())
 
+    def _validated_detections(self, detections: list[Detection]) -> list[Detection]:
+        supported = set(YOLO_SUPPORTED_CLASSES)
+        for detection in detections:
+            if detection.class_name not in supported:
+                self._set_detection_state(
+                    DetectionHealthStatus.UNAVAILABLE,
+                    "Detection model class mismatch",
+                )
+                logger.error("detection_worker: unsupported YOLO class %s", detection.class_name)
+                return []
+        return list(detections)
+
     async def _broadcast_status(self) -> None:
         if self._session is None:
             return
@@ -266,6 +434,7 @@ class DetectionWorker:
             stream_status=self._session.stream_status,
             detection_status=self._session.detection_status,
             active_viewer_count=self._session.active_viewer_count,
+            message=self._status_message,
         )
         overlay_hub.broadcast(msg.to_ws_dict())
 
