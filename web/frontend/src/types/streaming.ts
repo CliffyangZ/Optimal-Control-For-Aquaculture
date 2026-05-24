@@ -41,7 +41,25 @@ export interface DetectionPayload {
   height: number
 }
 
-export interface DetectionsMessage {
+export interface DetectorResult {
+  model_name: string
+  inference_ms: number
+  detections: DetectionPayload[]
+}
+
+export interface FeedAreaData {
+  raw_area: number
+  kalman_area: number
+  detection_count: number
+}
+
+export interface FeedAnalysisHistory {
+  frame_ids: number[]
+  raw_areas: number[]
+  kalman_areas: number[]
+}
+
+export interface DetectionsMessageV1 {
   schema: 'detections.v1'
   type: 'detections'
   source_id: string
@@ -54,6 +72,25 @@ export interface DetectionsMessage {
   detections: DetectionPayload[]
   message: string | null
 }
+
+export interface DetectionsMessageV2 {
+  schema: 'detections.v2'
+  type: 'detections'
+  source_id: string
+  frame_id: number
+  timestamp_ms: number
+  source_width: number
+  source_height: number
+  stream_status: StreamStatus
+  detection_status: DetectionStatus
+  detections: DetectionPayload[]
+  detectors: DetectorResult[]
+  feed_area: FeedAreaData
+  feed_analysis: FeedAnalysisHistory
+  message?: string | null
+}
+
+export type DetectionsMessage = DetectionsMessageV1 | DetectionsMessageV2
 
 export interface StatusWsMessage {
   schema: 'status.v1'

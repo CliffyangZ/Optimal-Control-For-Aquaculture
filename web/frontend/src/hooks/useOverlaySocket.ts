@@ -80,7 +80,7 @@ export function useOverlaySocket({
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data as string)
-        if (data.schema === 'detections.v1' && data.type === 'detections') {
+        if ((data.schema === 'detections.v1' || data.schema === 'detections.v2') && data.type === 'detections') {
           const msg = data as DetectionsMessage
           if (msg.timestamp_ms > latestTimestampRef.current) {
             latestTimestampRef.current = msg.timestamp_ms

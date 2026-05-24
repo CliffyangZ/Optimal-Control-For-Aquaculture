@@ -54,7 +54,16 @@ export function OverlayLayer({ overlay, videoRef, staleMs }: OverlayLayerProps) 
   }, [videoRef, overlay.source_width, overlay.source_height])
 
   const isStale = Date.now() - overlay.timestamp_ms > staleMs || overlay.detection_status === 'stale'
-  if (isStale || !videoRect || overlay.detections.length === 0) return null
+
+  // Collect all detections from primary and detectors array
+  const allDetections = [...overlay.detections]
+  if ('detectors' in overlay && overlay.detectors) {
+    for (const detector of overlay.detectors) {
+      allDetections.push(...detector.detections)
+    }
+  }
+
+  if (isStale || !videoRect || allDetections.length === 0) return null
 
   return (
     <svg
@@ -62,7 +71,7 @@ export function OverlayLayer({ overlay, videoRef, staleMs }: OverlayLayerProps) 
       viewBox={`0 0 ${videoRect.width} ${videoRect.height}`}
       style={{ left: videoRect.x, top: videoRect.y, width: videoRect.width, height: videoRect.height, position: 'absolute' }}
     >
-      {overlay.detections.map((detection, index) => (
+      {allDetections.map((detection, index) => (
         <DetectionBox
           key={`${detection.class_name}-${index}-${detection.x}-${detection.y}`}
           detection={detection}
@@ -79,7 +88,7 @@ function DetectionBox({ detection, width, height }: { detection: DetectionPayloa
   const y = detection.y * height
   const w = detection.width * width
   const h = detection.height * height
-  const color = CLASS_LABEL_COLOR[detection.class_name]
+  const color = CLASS_LABEL_COLOR[detection.class_name] || '#9ca3af'
   const label = `${detection.class_name} ${Math.round(detection.confidence * 100)}%`
 
   return (
