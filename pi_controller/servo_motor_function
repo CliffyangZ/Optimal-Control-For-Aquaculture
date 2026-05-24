@@ -1,0 +1,44 @@
+#include <Servo.h>
+
+Servo myServo;
+
+const int SERVO_PIN = 9;
+
+const int CLOSE_ANGLE = 0;
+const int OPEN_ANGLE = 30;
+
+void setup() {
+  Serial.begin(9600);
+
+  myServo.attach(SERVO_PIN);
+  myServo.write(CLOSE_ANGLE);
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+
+    if (command == "0") {
+      triggerServo(300);
+      Serial.println("OK 0");
+    }
+    else if (command == "1") {
+      triggerServo(700);
+      Serial.println("OK 1");
+    }
+    else if (command == "2") {
+      triggerServo(1500);
+      Serial.println("OK 2");
+    }
+    else {
+      Serial.println("UNKNOWN COMMAND");
+    }
+  }
+}
+
+void triggerServo(int waitTimeMs) {
+  myServo.write(OPEN_ANGLE);
+  delay(waitTimeMs);
+  myServo.write(CLOSE_ANGLE);
+}
