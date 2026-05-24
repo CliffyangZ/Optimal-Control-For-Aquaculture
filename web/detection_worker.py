@@ -6,8 +6,11 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from core.infer.feed_analyzer import FeedAreaSnapshot
 
 from config.setting import (
     SOURCE_ID,
@@ -30,9 +33,17 @@ from core.models import (
 )
 from core.stream_health import derive_detection_status, derive_stream_status
 from core.types import Detection, DetectionResult
+from core.infer.feed_analyzer import FeedAnalysis, FeedAreaSnapshot
 from streaming.latest_frame_reader import LatestFrameReader
 from web.overlay_hub import overlay_hub
-from web.schemas import DetectionsMessage, DetectionPayload, StatusMessage
+from web.schemas import (
+    DetectionsMessage,
+    DetectionPayload,
+    DetectorResult,
+    FeedAreaData,
+    FeedAnalysisHistory,
+    StatusMessage,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -54,12 +65,14 @@ class DetectionWorker:
         self._lock = asyncio.Lock()
         self._worker_task: Optional[asyncio.Task] = None
         self._frame_reader: Optional[LatestFrameReader] = None
-        self._detector = None  # YOLODetector; loaded lazily in _start_worker
+        self._yolo_detector = None  # YOLODetector; loaded lazily in _start_worker
+        self._rfdetr_detector = None  # RFDETRDetector; loaded lazily if configured
         self._frame_counter = 0
         self._overlay_intervals: list[float] = []
         self._last_overlay_monotonic: Optional[float] = None
         self._last_processed_frame_id: Optional[int] = None
         self._status_message: Optional[str] = None
+        self._feed_analyzer = FeedAnalysis()  # Real-time feed area analysis
 
     # --- Public API ---
 
@@ -145,7 +158,7 @@ class DetectionWorker:
             self._session.detection_status = status
 
     def _sync_detection_state_for_frame_source(self, has_frame: bool) -> None:
-        if self._session is None or self._detector is None:
+        if self._session is None or self._yolo_detector is None:
             return
         if has_frame:
             if self._status_message == DETECTION_STREAM_UNAVAILABLE_MESSAGE:
@@ -158,7 +171,7 @@ class DetectionWorker:
             )
 
     def _refresh_detection_state(self, last_frame_at: Optional[datetime]) -> None:
-        if self._session is None or self._detector is None:
+        if self._session is None or self._yolo_detector is None:
             return
         if self._session.stream_status == StreamStatus.STREAM_UNAVAILABLE:
             self._set_detection_state(
@@ -199,7 +212,7 @@ class DetectionWorker:
         return True
 
     def _load_detector(self) -> None:
-        if self._detector is not None:
+        if self._yolo_detector is not None:
             self._set_detection_state(DetectionHealthStatus.ACTIVE)
             return
 
@@ -223,7 +236,7 @@ class DetectionWorker:
                 device,
                 YOLO_CONFIDENCE_THRESHOLD,
             )
-            self._detector = YOLODetector.load(
+            self._yolo_detector = YOLODetector.load(
                 model_path,
                 device=device,
                 conf_threshold=YOLO_CONFIDENCE_THRESHOLD,
@@ -235,7 +248,7 @@ class DetectionWorker:
                 device,
             )
         except Exception:
-            self._detector = None
+            self._yolo_detector = None
             self._set_detection_state(
                 DetectionHealthStatus.UNAVAILABLE,
                 "Detection model unavailable",
@@ -246,12 +259,51 @@ class DetectionWorker:
                 device,
             )
 
+    def _load_rfdetr_detector(self) -> None:
+        """Load RF-DETR detector if configured."""
+        if self._rfdetr_detector is not None:
+            return
+
+        model_path = os.environ.get("RFDETR_MODEL_PATH", "").strip()
+        if not model_path:
+            logger.debug("detection_worker: RFDETR_MODEL_PATH not configured; RF-DETR disabled")
+            return
+
+        device = self._configured_device()
+        try:
+            from core.infer.rfdetr_detector import RFDETRDetector
+
+            logger.info(
+                "detection_worker: loading RFDETRDetector model_path=%s device=%s conf_threshold=%.3f",
+                model_path,
+                device,
+                YOLO_CONFIDENCE_THRESHOLD,
+            )
+            self._rfdetr_detector = RFDETRDetector.load(
+                model_path,
+                device=device,
+                conf_threshold=YOLO_CONFIDENCE_THRESHOLD,
+            )
+            logger.info(
+                "detection_worker: loaded RFDETRDetector model_path=%s device=%s",
+                model_path,
+                device,
+            )
+        except Exception:
+            self._rfdetr_detector = None
+            logger.exception(
+                "detection_worker: failed to load RFDETRDetector model_path=%s device=%s",
+                model_path,
+                device,
+            )
+
     async def _run(self) -> None:
         logger.info("detection_worker: started for source=%s", SOURCE_ID)
         loop = asyncio.get_running_loop()
 
-        # Load model in thread pool so the event loop stays responsive during init
+        # Load models in thread pool so the event loop stays responsive during init
         await loop.run_in_executor(None, self._load_detector)
+        await loop.run_in_executor(None, self._load_rfdetr_detector)
 
         detection_interval = 1.0 / TARGET_DETECTION_FPS if TARGET_DETECTION_FPS > 0 else 0.1
         idle_since: Optional[float] = None
@@ -318,7 +370,7 @@ class DetectionWorker:
                     image=raw_frame.image,
                 )
 
-                if self._detector is None:
+                if self._yolo_detector is None:
                     await self._broadcast_status()
                     elapsed = time.monotonic() - loop_start
                     await asyncio.sleep(max(0, detection_interval - elapsed))
@@ -331,16 +383,16 @@ class DetectionWorker:
                     await asyncio.sleep(max(0, detection_interval - elapsed))
                     continue
 
-                # Run YOLO inference in thread pool to avoid blocking event loop
+                # Run YOLO inference in thread pool
                 try:
                     detect_fn = functools.partial(
-                        self._detector.detect,
+                        self._yolo_detector.detect,
                         video_frame.image,
                         frame_id=video_frame.frame_id,
                     )
-                    result: DetectionResult = await loop.run_in_executor(None, detect_fn)
+                    yolo_result: DetectionResult = await loop.run_in_executor(None, detect_fn)
                 except Exception:
-                    self._detector = None
+                    self._yolo_detector = None
                     self._set_detection_state(
                         DetectionHealthStatus.UNAVAILABLE,
                         "Detection model unavailable",
@@ -350,14 +402,34 @@ class DetectionWorker:
                     elapsed = time.monotonic() - loop_start
                     await asyncio.sleep(max(0, detection_interval - elapsed))
                     continue
-                # Override captured_at with the frame's acquisition time, not inference time
-                result.captured_at = video_frame.captured_at
-                result.detections = self._validated_detections(result.detections)
+
+                # Override captured_at with frame's acquisition time
+                yolo_result.captured_at = video_frame.captured_at
+                yolo_result.detections = self._validated_detections(yolo_result.detections)
+
                 if self._session and self._session.detection_status == DetectionHealthStatus.UNAVAILABLE:
                     await self._broadcast_status()
                     elapsed = time.monotonic() - loop_start
                     await asyncio.sleep(max(0, detection_interval - elapsed))
                     continue
+
+                # Run RF-DETR inference if available
+                rfdetr_result: Optional[DetectionResult] = None
+                if self._rfdetr_detector:
+                    try:
+                        detect_fn = functools.partial(
+                            self._rfdetr_detector.detect,
+                            video_frame.image,
+                            frame_id=video_frame.frame_id,
+                        )
+                        rfdetr_result = await loop.run_in_executor(None, detect_fn)
+                        rfdetr_result.captured_at = video_frame.captured_at
+                    except Exception:
+                        logger.exception("detection_worker: RF-DETR inference failed")
+                        self._rfdetr_detector = None
+
+                # Analyze feed area using primary detector (YOLO)
+                feed_snapshot = self._feed_analyzer.analyze_frame(yolo_result, model_name="yolo")
 
                 now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
@@ -370,7 +442,7 @@ class DetectionWorker:
                         stale_seconds=STALE_OVERLAY_MS / 1000,
                     )
 
-                await self._broadcast_overlay(video_frame, result, now_ms)
+                await self._broadcast_overlay(video_frame, yolo_result, rfdetr_result, feed_snapshot, now_ms)
 
                 elapsed = time.monotonic() - loop_start
                 await asyncio.sleep(max(0, detection_interval - elapsed))
@@ -382,11 +454,19 @@ class DetectionWorker:
         finally:
             await self._shutdown()
 
-    async def _broadcast_overlay(self, frame: VideoFrame, result: DetectionResult, now_ms: int) -> None:
+    async def _broadcast_overlay(
+        self,
+        frame: VideoFrame,
+        yolo_result: DetectionResult,
+        rfdetr_result: Optional[DetectionResult],
+        feed_snapshot: "FeedAreaSnapshot",
+        now_ms: int,
+    ) -> None:
         if self._session is None:
             return
 
-        detection_payloads = [
+        # Primary YOLO detections
+        yolo_payloads = [
             DetectionPayload(
                 class_name=d.class_name,
                 confidence=d.confidence,
@@ -395,11 +475,56 @@ class DetectionWorker:
                 width=d.bbox_w,
                 height=d.bbox_h,
             )
-            for d in result.detections
+            for d in yolo_result.detections
         ]
 
+        # Build detector results list
+        detectors = [
+            DetectorResult(
+                model_name="yolo",
+                inference_ms=yolo_result.inference_ms,
+                detections=yolo_payloads,
+            )
+        ]
+
+        # Add RF-DETR if available
+        if rfdetr_result:
+            rfdetr_payloads = [
+                DetectionPayload(
+                    class_name=d.class_name,
+                    confidence=d.confidence,
+                    x=d.bbox_x,
+                    y=d.bbox_y,
+                    width=d.bbox_w,
+                    height=d.bbox_h,
+                )
+                for d in rfdetr_result.detections
+            ]
+            detectors.append(
+                DetectorResult(
+                    model_name="rfdetr",
+                    inference_ms=rfdetr_result.inference_ms,
+                    detections=rfdetr_payloads,
+                )
+            )
+
+        # Feed area data
+        feed_area = FeedAreaData(
+            raw_area=feed_snapshot.raw_area,
+            kalman_area=feed_snapshot.kalman_area,
+            detection_count=feed_snapshot.detection_count,
+        )
+
+        # Feed analysis history (last 10 seconds at 30fps)
+        frame_ids, raw_areas, kalman_areas = self._feed_analyzer.get_history_data()
+        feed_analysis = FeedAnalysisHistory(
+            frame_ids=frame_ids,
+            raw_areas=raw_areas,
+            kalman_areas=kalman_areas,
+        )
+
         msg = DetectionsMessage(
-            schema="detections.v1",
+            schema="detections.v2",
             source_id=self._session.source_id,
             frame_id=frame.frame_id,
             timestamp_ms=now_ms,
@@ -407,7 +532,10 @@ class DetectionWorker:
             source_height=frame.source_height,
             stream_status=self._session.stream_status,
             detection_status=self._session.detection_status,
-            detections=detection_payloads,
+            detections=yolo_payloads,
+            detectors=detectors,
+            feed_area=feed_area,
+            feed_analysis=feed_analysis,
         )
         overlay_hub.broadcast(msg.to_ws_dict())
 

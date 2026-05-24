@@ -95,7 +95,6 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
 
 
 def _cmd_infer(args: argparse.Namespace) -> int:
-    from core.infer.detector import YOLODetector
     import json as _json
     import cv2
 
@@ -104,11 +103,31 @@ def _cmd_infer(args: argparse.Namespace) -> int:
         print(f"[infer] ERROR: model file not found: {model_path}", file=sys.stderr)
         return 1
 
-    detector = YOLODetector.load(
-        model_path,
-        device=args.device,
-        conf_threshold=args.conf,
-    )
+    # Determine model type: auto-detect or use explicit type
+    model_type = args.model_type
+    if model_type == "auto":
+        # Auto-detect based on file path patterns
+        if "rfdetr" in str(model_path).lower():
+            model_type = "rfdetr"
+        elif model_path.suffix == ".pt":
+            model_type = "yolo"
+        else:
+            model_type = "yolo"  # Default to YOLO
+
+    if model_type == "rfdetr":
+        from core.infer.rfdetr_detector import RFDETRDetector
+        detector = RFDETRDetector.load(
+            model_path,
+            device=args.device,
+            conf_threshold=args.conf,
+        )
+    else:
+        from core.infer.detector import YOLODetector
+        detector = YOLODetector.load(
+            model_path,
+            device=args.device,
+            conf_threshold=args.conf,
+        )
 
     source = args.source
     cap = cv2.VideoCapture(source if source.startswith("rtsp") else str(source))
@@ -260,11 +279,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ev.set_defaults(func=_cmd_evaluate)
 
     p_in = sub.add_parser("infer", help="Run YOLO26 inference on image/video/RTSP")
-    p_in.add_argument("--model", type=Path, required=True, help="Path to .pt weights file")
+    p_in.add_argument("--model", type=Path, required=True, help="Path to model weights file (.pt for YOLO, .pth for RF-DETR)")
     p_in.add_argument("--source", type=str, required=True, help="Image path, video path, or RTSP URL")
     p_in.add_argument("--output", type=str, default=None, help="Output video path (optional; if not provided, only JSON output)")
     p_in.add_argument("--conf", type=float, default=0.70, help="Confidence threshold")
     p_in.add_argument("--device", type=str, default="cuda", help="Inference device (cuda/cpu/0)")
+    p_in.add_argument("--model-type", type=str, default="auto", choices=["auto", "yolo", "rfdetr"], help="Model type (auto-detect, yolo, or rfdetr)")
     p_in.set_defaults(func=_cmd_infer)
 
     return parser
