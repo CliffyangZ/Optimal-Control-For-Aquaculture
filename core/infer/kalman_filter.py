@@ -10,16 +10,16 @@ from dataclasses import dataclass, field
 class KalmanFilterConfig:
     """Configuration for Kalman Filter behavior."""
 
-    sigma_R: float = 0.15
-    """Measurement noise standard deviation (observational error)."""
+    sigma_R: float = 0.5
+    """Measurement noise std dev in log-space (observational error). Increased to allow natural area variations."""
 
-    sigma_Q: float = 5e-3
-    """Process noise standard deviation (model uncertainty)."""
+    sigma_Q: float = 0.01
+    """Process noise std dev in log-space (model uncertainty)."""
 
     reject_outliers: bool = True
     """Whether to reject measurements >N*sigma from predicted value."""
 
-    outlier_threshold: float = 3.0
+    outlier_threshold: float = 2.5
     """Standard deviations threshold for outlier rejection."""
 
     use_log_space: bool = True
@@ -141,8 +141,19 @@ class LogNormalKalmanFilter(KalmanFilter):
     """Kalman Filter for log-normal distributed measurements.
 
     Feed area measurements follow a log-normal distribution.
-    This filter operates in log-space for better numerical stability.
+    This filter operates in log-space for better numerical stability
+    but stores values in original space for consistency.
     """
+
+    def __init__(self, sigma_R: float, sigma_Q: float) -> None:
+        """Initialize filter state.
+
+        Args:
+            sigma_R: Measurement noise std dev (in log-space)
+            sigma_Q: Process noise std dev (in log-space)
+        """
+        super().__init__(sigma_R, sigma_Q)
+        self.history_x_log: list[float] = []
 
     def update(self, area_measurement: float, reject_outliers: bool = False, outlier_threshold: float = 3.0) -> float:
         """Update filter with log-transformed measurement.
@@ -157,9 +168,11 @@ class LogNormalKalmanFilter(KalmanFilter):
         """
         if area_measurement <= 0:
             self.history_measurements.append(0.0)
-            self.history_x.append([math.exp(self.x_estimate)])
+            filtered_area = math.exp(self.x_estimate) if self.initialized else 0.0
+            self.history_x.append([filtered_area])
+            self.history_x_log.append(self.x_estimate)
             self.history_p.append([self.p_estimate])
-            return math.exp(self.x_estimate) if self.initialized else 0.0
+            return filtered_area
 
         log_measurement = math.log(area_measurement)
 
@@ -169,6 +182,7 @@ class LogNormalKalmanFilter(KalmanFilter):
             self.initialized = True
             self.history_measurements.append(area_measurement)
             self.history_x.append([area_measurement])
+            self.history_x_log.append(log_measurement)
             self.history_p.append([self.p_estimate])
             return area_measurement
 
@@ -179,9 +193,11 @@ class LogNormalKalmanFilter(KalmanFilter):
             innovation = abs(log_measurement - predicted_log_y)
             if innovation > outlier_threshold * math.sqrt(S):
                 self.history_measurements.append(area_measurement)
-                self.history_x.append([math.exp(self.x_estimate)])
+                filtered_area = math.exp(self.x_estimate)
+                self.history_x.append([filtered_area])
+                self.history_x_log.append(self.x_estimate)
                 self.history_p.append([self.p_estimate])
-                return math.exp(self.x_estimate)
+                return filtered_area
 
         K = self.p_estimate / S
         self.x_estimate = self.x_estimate + K * (log_measurement - self.x_estimate)
@@ -190,6 +206,7 @@ class LogNormalKalmanFilter(KalmanFilter):
         filtered_area = math.exp(self.x_estimate)
         self.history_measurements.append(area_measurement)
         self.history_x.append([filtered_area])
+        self.history_x_log.append(self.x_estimate)
         self.history_p.append([self.p_estimate])
 
         return filtered_area
@@ -200,25 +217,25 @@ class LogNormalKalmanFilter(KalmanFilter):
         return math.exp(self.x_estimate)
 
     def rts_smooth(self) -> list[float]:
-        """RTS backward smoothing in log-space."""
-        n = len(self.history_x)
+        """RTS backward smoothing in log-space with consistent history storage."""
+        n = len(self.history_x_log)
         if n == 0:
             return []
 
-        x_log = [math.log(self.history_x[i][0]) if self.history_x[i][0] > 0 else 0.0 for i in range(n)]
-        x_smooth = [[x_log[i]] for i in range(n)]
+        x_smooth = [self.history_x_log[i] for i in range(n)]
         p_smooth = [self.history_p[i][0] for i in range(n)]
 
         for k in range(n - 2, -1, -1):
-            x_pred = x_log[k]
+            x_pred = self.history_x_log[k]
             p_pred = self.history_p[k][0] + self.Q
             C = self.history_p[k][0] / p_pred if p_pred > 0 else 0.0
 
-            x_smooth[k][0] = x_log[k] + C * (x_smooth[k + 1][0] - x_pred)
+            x_smooth[k] = self.history_x_log[k] + C * (x_smooth[k + 1] - x_pred)
             p_smooth[k] = self.history_p[k][0] + C**2 * (p_smooth[k + 1] - p_pred) if p_pred > 0 else self.history_p[k][0]
 
-        smoothed_areas = [math.exp(x_smooth[i][0]) for i in range(n)]
+        smoothed_areas = [math.exp(x_smooth[i]) if x_smooth[i] > -100 else 0.0 for i in range(n)]
         self.history_x = [[a] for a in smoothed_areas]
+        self.history_x_log = x_smooth
         self.history_p = [[p] for p in p_smooth]
 
         return smoothed_areas

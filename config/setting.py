@@ -38,7 +38,7 @@ STREAM_URL = os.environ.get("STREAM_URL", DEFAULT_STREAM_URL)
 TARGET_WIDTH = 640
 TARGET_HEIGHT = 640
 TARGET_DISPLAY_FPS = 30
-TARGET_DETECTION_FPS = 10
+TARGET_DETECTION_FPS = 1  # RF-DETR inference ~1.2s per frame, targeting 1 FPS max
 INTERRUPTION_TIMEOUT_SECONDS = 3
 
 VALIDATION_MANIFEST_PATH = "validation/clips.local.yml"
@@ -52,7 +52,7 @@ WEBRTC_PATH_TEMPLATE = "/{source_id}/whep"
 
 # Overlay / WebSocket
 STALE_OVERLAY_MS = 500
-OVERLAY_HUB_QUEUE_MAXSIZE = 1
+OVERLAY_HUB_QUEUE_MAXSIZE = 5  # Increased to prevent message loss during slow inference
 
 # Approved YOLO web recognition
 YOLO_MODEL_PATH = os.environ.get("YOLO_MODEL_PATH", "")

@@ -21,6 +21,12 @@ npm run dev
 
 前端開發伺服器預設在 `http://localhost:5173`，API 會代理到 `http://localhost:8000`。
 
+### Inferencing cmd
+```bash
+ uv run python train.py infer --model models/rf-detr-fish-regular.pth --source data/toilet_test.mp4 --model-type rfdetr --output outputs/test_toilets.mp4 --conf 0.3
+```
+
+
 ### File Structure
 
 ```text

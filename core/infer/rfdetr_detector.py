@@ -32,10 +32,37 @@ class RFDETRDetector:
         conf_threshold: float = YOLO_CONFIDENCE_THRESHOLD,
     ) -> "RFDETRDetector":
         """Load an RF-DETR model from checkpoint."""
+        import warnings
+        import sys
+        import os
+        from io import StringIO
+
         from rfdetr.detr import RFDETR
 
-        model = RFDETR.from_checkpoint(str(model_path))
-        model.device = torch.device(device)
+        # Suppress all deprecation warnings and transformers logging
+        warnings.filterwarnings('ignore', category=DeprecationWarning)
+        warnings.filterwarnings('ignore', message='.*use_return_dict.*')
+
+        # Suppress transformers debug output
+        os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+
+        # Redirect stderr to suppress the printed warning
+        old_stderr = sys.stderr
+        sys.stderr = StringIO()
+
+        try:
+            model = RFDETR.from_checkpoint(str(model_path))
+        finally:
+            sys.stderr = old_stderr
+
+        # Set device in the model's internal ModelContext
+        if hasattr(model, 'model') and hasattr(model.model, 'device'):
+            model.model.device = torch.device(device)
+
+        # Optimize for faster inference (10-15% latency improvement)
+        if hasattr(model, 'optimize_for_inference'):
+            model.optimize_for_inference()
+
         return cls(model, conf_threshold)
 
     def detect(self, raw_frame: np.ndarray, frame_id: int = 0) -> DetectionResult:
@@ -69,11 +96,17 @@ class RFDETRDetector:
 
                 x1, y1, x2, y2 = box
 
-                # Normalize pixel coordinates to [0, 1]
-                bx = float(x1) / w
-                by = float(y1) / h
-                bw = float(x2 - x1) / w
-                bh = float(y2 - y1) / h
+                # Clip pixel coordinates before normalization so boxes crossing
+                # frame edges keep the correct visible width and height.
+                x1 = max(0.0, min(float(w), float(x1)))
+                y1 = max(0.0, min(float(h), float(y1)))
+                x2 = max(0.0, min(float(w), float(x2)))
+                y2 = max(0.0, min(float(h), float(y2)))
+
+                bx = x1 / w
+                by = y1 / h
+                bw = max(0.0, (x2 - x1) / w)
+                bh = max(0.0, (y2 - y1) / h)
 
                 # Get class name from model if available
                 class_name = str(int(cls_id)) if cls_id is not None else "unknown"
