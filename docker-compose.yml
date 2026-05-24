@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - YOLO_MODEL_PATH=${YOLO_MODEL_PATH}
+      - YOLO_DEVICE=${YOLO_DEVICE:-cpu}
+      - YOLO_CONFIDENCE_THRESHOLD=${YOLO_CONFIDENCE_THRESHOLD:-0.5}
+      - STREAM_URL=${STREAM_URL}
+      - MEDIAMTX_HOST=${MEDIAMTX_HOST}
+      - MEDIAMTX_WEBRTC_PORT=${MEDIAMTX_WEBRTC_PORT:-8889}
+      - SOURCE_ID=${SOURCE_ID:-cam}
+      - RFDETR_MODEL_PATH=${RFDETR_MODEL_PATH}
+    volumes:
+      - ./models:/app/models:ro
+      - ./logs:/app/logs
+    network_mode: "host"
+    # For GPU support, uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    network_mode: "host"
+
+volumes:
+  logs:
+    driver: local

@@ -1,0 +1,406 @@
+════════════════════════════════════════════════════════════════════════════════
+                  LOG-NORMAL KALMAN FILTER FOR FEED MONITORING
+                         水產養殖飼料量監控系統算法
+════════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 為什麼需要 Kalman Filter?                                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ❌ 檢測器的噪聲是「乘法性」的：                                             │
+│     真實面積 = 100 px²  →  誤差 ±20%  →  50~120 px²                      │
+│     真實面積 = 1000 px² →  誤差 ±20%  →  500~1200 px²                    │
+│                                                                             │
+│  ✅ 解決方案：在對數空間中工作                                              │
+│     log(z) = log(A) + log(ε)  →  乘法噪聲變成加法噪聲                    │
+│     現在可用 Kalman Filter 進
+【基本信息】
+  視頻文件: data/fish_feeding.mp4
+  YOLO 模型: models/yoloFish.pt
+  處理幀數: 563
+【基本信息】
+  視頻文件: data/fish_feeding.mp4
+  YOLO 模型: models/yoloFish.pt
+  處理幀數: 563
+  視頻時長: 18.77 秒
+  信心度閾值: 0.35
+
+【飼料面積統計】
+  原始值範圍: 0 ~ 1,707,559 pixels²
+  濾波值範圍: 181 ~ 1,496,583 pixels²
+  原始平均值: 313,504 pixels²
+  濾波平均值: 299,372 pixels²
+
+【Kalman Filter 參數】
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+Cell In[17], line 19
+     15 print(f"  原始平均值: {feed_areas_raw.mean():,.0f} pixels²")
+     16 print(f"  濾波平均值: {feed_areas_filtered.mean():,.0f} pixels²")
+     17 
+     18 print(f"\n【Kalman Filter 參數】")
+---> 19 print(f"  過程噪聲 (Q): {CONFIG['kalman_q']}")
+     20 print(f"  測量噪聲 (R): {CONFIG['kalman_r']}")
+     21 print(f"  降噪效率: {noise_reduction:.1f}%")
+     22 
+
+KeyError: 'kalman_q'
+  視頻時長: 18.77 秒
+【基本信息】
+  視頻文件: data/fish_feeding.mp4
+  YOLO 模型: models/yoloFish.pt
+  處理幀數: 563
+  視頻時長: 18.77 秒
+  信心度閾值: 0.35
+
+【飼料面積統計】
+  原始值範圍: 0 ~ 1,707,559 pixels²
+  濾波值範圍: 181 ~ 1,496,583 pixels²
+  原始平均值: 313,504 pixels²
+  濾波平均值: 299,372 pixels²
+
+【Kalman Filter 參數】
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+Cell In[17], line 19
+     15 print(f"  原始平均值: {feed_areas_raw.mean():,.0f} pixels²")
+     16 print(f"  濾波平均值: {feed_areas_filtered.mean():,.0f} pixels²")
+     17 
+     18 print(f"\n【Kalman Filter 參數】")
+---> 19 print(f"  過程噪聲 (Q): {CONFIG['kalman_q']}")
+     20 print(f"  測量噪聲 (R): {CONFIG['kalman_r']}")
+     21 print(f"  降噪效率: {noise_reduction:.1f}%")
+     22 
+
+KeyError: 'kalman_q'
+【基本信息】
+  視頻文件: data/fish_feeding.mp4
+  YOLO 模型: models/yoloFish.pt
+  處理幀數: 563
+  視頻時長: 18.77 秒
+  信心度閾值: 0.35
+
+【飼料面積統計】
+  原始值範圍: 0 ~ 1,707,559 pixels²
+  濾波值範圍: 181 ~ 1,496,583 pixels²
+  原始平均值: 313,504 pixels²
+  濾波平均值: 299,372 pixels²
+
+【Kalman Filter 參數】
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+Cell In[17], line 19
+     15 print(f"  原始平均值: {feed_areas_raw.mean():,.0f} pixels²")
+     16 print(f"  濾波平均值: {feed_areas_filtered.mean():,.0f} pixels²")
+     17 
+     18 print(f"\n【Kalman Filter 參數】")
+---> 19 print(f"  過程噪聲 (Q): {CONFIG['kalman_q']}")
+     20 print(f"  測量噪聲 (R): {CONFIG['kalman_r']}")
+     21 print(f"  降噪效率: {noise_reduction:.1f}%")
+     22 
+
+KeyError: 'kalman_q'
+  信心度閾值: 0.35
+
+【飼料面積統計】
+  原始值範圍: 0 ~ 1,707,559 pixels²
+  濾波值範圍: 181 ~ 1,496,583 pixels²
+  原始平均值: 313,504 pixels²
+  濾波平均值: 299,372 pixels²
+
+【Kalman Filter 參數】
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+Cell In[17], line 19
+     15 print(f"  原始平均值: {feed_areas_raw.mean():,.0f} pixels²")
+     16 print(f"  濾波平均值: {feed_areas_filtered.mean():,.0f} pixels²")
+     17 
+     18 print(f"\n【Kalman Filter 參數】")
+---> 19 print(f"  過程噪聲 (Q): {CONFIG['kalman_q']}")
+     20 print(f"  測量噪聲 (R): {CONFIG['kalman_r']}")
+     21 print(f"  降噪效率: {noise_reduction:.1f}%")
+     22 
+
+KeyError: 'kalman_q'行最優濾波                                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+════════════════════════════════════════════════════════════════════════════════
+                            📐 MATHEMATICAL CORE
+════════════════════════════════════════════════════════════════════════════════
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ STATE VECTOR (狀態)                                                        ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                                                            ┃
+┃            x = [ μ   ]     where  μ = log(飼料面積) [log pixels²]        ┃
+┃                [ μ̇   ]            μ̇ = 消耗速率 [%/frame]             ┃
+┃                                                                            ┃
+┃  Example: μ = 6.0, μ̇ = -0.02                                            ┃
+┃  →  飼料面積 ≈ 403 px², 每幀減少 2%                                      ┃
+┃                                                                            ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ STATE TRANSITION MATRIX                                                   ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                                                            ┃
+┃              ┌─────┐                                                       ┃
+┃        F =   │ 1  Δt│      (假設消耗速率恆定)                             ┃
+┃              │ 0   1 │                                                     ┃
+┃              └─────┘                                                       ┃
+┃              Δt = 1 frame                                                 ┃
+┃                                                                            ┃
+┃  x_{t+1} = F · x_t                                                        ┃
+┃  下一幀 = F × 當前幀                                                      ┃
+┃                                                                            ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+
+════════════════════════════════════════════════════════════════════════════════
+                         🔄 ALGORITHM: 5 STEPS PER FRAME
+════════════════════════════════════════════════════════════════════════════════
+
+NEW FRAME t with measurement z_t:
+   ↓
+   ├─→ 【Step 1】PREDICT STATE
+   │      x̂⁻_t = F · x̂_{t-1}
+   │      P⁻_t = F · P_{t-1} · F^T + Q
+   │      └─→ 預測當前面積 & 速率
+   │
+   ├─→ 【Step 2】INNOVATE (測量驚訝度)
+   │      y_t = log(z_t)
+   │      γ = y_t - x̂⁻_t[0]     (差異有多大？)
+   │      S = P⁻_t[0,0] + σ_R²    (總不確定度)
+   │      └─→ 計算測量與預測的偏差
+   │
+   ├─→ 【Step 3】KALMAN GAIN (信任度)
+   │      K = P⁻_t[0,0] / S
+   │      K ∈ [0, 1]
+   │      K = 1  →  完全信任測量
+   │      K = 0  →  完全信任預測
+   │      └─→ 決定相信多少
+   │
+   ├─→ 【Step 4】UPDATE STATE
+   │      x̂_t = x̂⁻_t + K · γ
+   │      P_t = (1 - K) · P⁻_t
+   │      └─→ 融合預測與測量
+   │
+   └─→ 【Step 5】OUTPUT (轉換回像素空間)
+          Â_t = exp(x̂_t[0] + P_t[0,0]/2)    ← 無偏估計
+          Rate_t = x̂_t[1] × 100  (%/frame)
+          CI = [exp(x̂[0] - √P[0,0]), exp(x̂[0] + √P[0,0])]
+
+
+════════════════════════════════════════════════════════════════════════════════
+                    🎯 CORE EQUATIONS (for poster)
+════════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────┐
+│                   PREDICT EQUATIONS                          │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│   x̂⁻ = F · x̂          Prior state estimate               │
+│   P⁻ = F·P·F^T + Q     Prior covariance                    │
+│                                                              │
+│   F = [1  1]  (one-step transition)                        │
+│       [0  1]                                                │
+│                                                              │
+│   Q = σ_Q·[1/4  1/2]   Process noise                       │
+│           [1/2   1  ]   (controls rate variability)        │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│                   UPDATE EQUATIONS                           │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│   γ = y - h·x̂⁻        Innovation (measurement surprise)  │
+│   S = h·P⁻·h^T + R     Innovation covariance               │
+│   K = (P⁻·h^T) / S     Kalman gain (0 ≤ K ≤ 1)            │
+│   x̂ = x̂⁻ + K·γ       Posterior state                      │
+│   P = (I - K·h)·P⁻     Posterior covariance                │
+│                                                              │
+│   h = [1, 0]  (observation matrix)                         │
+│   R = σ_R²    (measurement noise variance)                 │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│                   OUTPUT EQUATIONS                           │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│   Unbiased Area Estimate:                                  │
+│   Â = exp(μ̂ + σ²_μ/2)   ← Important! Don't forget /2    │
+│                                                              │
+│   Consumption Rate:                                         │
+│   Rate [%/frame] = μ̇ × 100                                │
+│   Rate [%/sec]   = μ̇ × 100 × fps                         │
+│                                                              │
+│   Confidence Interval (1-sigma):                           │
+│   Lower = exp(μ̂ - σ_μ)                                    │
+│   Upper = exp(μ̂ + σ_μ)                                    │
+│   where σ_μ = √(P[0,0])                                    │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+
+
+════════════════════════════════════════════════════════════════════════════════
+                      ⚙️ PARAMETER SELECTION GUIDE
+════════════════════════════════════════════════════════════════════════════════
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ σ_R: Measurement Noise Standard Deviation                                ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                                                           ┃
+┃  σ_R = ln(1 + relative_detector_error)                                  ┃
+┃                                                                           ┃
+┃  Detector Error  │  σ_R Value  │  Effect                               ┃
+┃  ─────────────────────────────────────────────────────────────         ┃
+┃  ±5%            │  0.049      │  Very trusting                         ┃
+┃  ±10%           │  0.095      │  Quite trusting                        ┃
+┃  ±15%           │  0.140      │  Balanced (RECOMMENDED)   ◄────────   ┃
+┃  ±20%           │  0.182      │  Less trusting                         ┃
+┃  ±30%           │  0.263      │  Very skeptical                        ┃
+┃                                                                           ┃
+┃  TYPICAL: σ_R ≈ 0.10 ~ 0.20                                            ┃
+┃                                                                           ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ σ_Q: Process Noise Intensity (Rate-of-Change Allowance)                 ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃                                                                          ┃
+┃  σ_Q Value   │  Behavior        │  Use Case                           ┃
+┃  ──────────────────────────────────────────────────────────────────   ┃
+┃  10⁻⁴        │  Very smooth     │  Constant consumption (rare)       ┃
+┃  10⁻³        │  Smooth          │  Normal feeding pattern (BEST)  ◄─ ┃
+┃  5×10⁻³      │  Balanced        │  Variable consumption              ┃
+┃  10⁻²        │  Sensitive       │  Rapid changes                     ┃
+┃  10⁻¹        │  Follows noise   │  Too sensitive (avoid)             ┃
+┃                                                                          ┃
+┃  TYPICAL: σ_Q ≈ 1.0 × 10⁻³                                             ┃
+┃                                                                          ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+
+════════════════════════════════════════════════════════════════════════════════
+                        📊 EXAMPLE WALKTHROUGH
+════════════════════════════════════════════════════════════════════════════════
+
+Given:
+  σ_R = 0.15  (±15% detector error)
+  σ_Q = 0.001 (smooth rate estimation)
+
+Frame 0: Raw measurement z₀ = 500 px²
+  ├─ y₀ = log(500) = 6.215
+  ├─ Initialize: x̂ = [6.215, 0]ᵀ
+  ├─ Estimate: Â = exp(6.215 + 0.15²/2) ≈ 505 px²
+  └─ Rate = 0 %/frame (just started)
+
+Frame 1: Raw measurement z₁ = 480 px²
+  ├─ PREDICT:
+  │   x̂⁻ = F·x̂ = [6.215, 0]ᵀ
+  │   P⁻ = ... ≈ [[0.024, 0], [0, 0.001]]
+  │
+  ├─ INNOVATE:
+  │   y = log(480) = 6.175
+  │   γ = 6.175 - 6.215 = -0.040
+  │   S = 0.024 + 0.0225 = 0.047
+  │
+  ├─ GAIN:
+  │   K = 0.024 / 0.047 ≈ 0.51  (moderate trust)
+  │
+  ├─ UPDATE:
+  │   x̂ = [6.215, 0] + 0.51·[-0.040, ?]ᵀ
+  │   x̂ ≈ [6.195, -0.010]ᵀ
+  │
+  └─ OUTPUT:
+     Â ≈ 492 px² (decreased)
+     Rate = -0.010 × 100 = -1.0 %/frame
+     Confidence: [470, 517] px² (1-sigma)
+
+
+════════════════════════════════════════════════════════════════════════════════
+                          ✅ WHY THIS WORKS
+════════════════════════════════════════════════════════════════════════════════
+
+✓ NOISE MODEL
+  └─ 檢測噪聲確實是乘法性的 → log transform 使其為加法性
+  └─ Kalman Filter 對加法高斯噪聲是最優的
+
+✓ JOINT ESTIMATION
+  └─ 同時估計面積和消耗速率（不是事後計算微分）
+  └─ 消耗速率更光滑，更有用於決策
+
+✓ UNBIASED ESTIMATES
+  └─ exp(μ + σ²/2) 校正對數正態分佈偏差
+  └─ 避免系統低估飼料面積
+
+✓ UNCERTAINTY QUANTIFICATION
+  └─ 從協方差矩陣自動計算置信區間
+  └─ 知道每個估計的可信度
+
+✓ ADAPTIVE FILTERING
+  └─ Kalman Gain 自動在測量和預測間權衡
+  └─ 高噪聲時更信任預測，低噪聲時更信任測量
+
+
+════════════════════════════════════════════════════════════════════════════════
+                        📋 QUICK REFERENCE CARD
+════════════════════════════════════════════════════════════════════════════════
+
+INPUT:  z_t ∈ ℝ (raw detector area in pixels²)
+           ↓
+        y_t = log(z_t)
+           ↓
+        ┌──────────────┐
+        │ PREDICT      │  x̂⁻ = F·x̂
+        │              │  P⁻ = F·P·F^T + Q
+        └──────┬───────┘
+               │
+        ┌──────────────┐
+        │ INNOVATE     │  γ = y - h·x̂⁻
+        │              │  S = h·P⁻·h^T + R
+        └──────┬───────┘
+               │
+        ┌──────────────┐
+        │ GAIN         │  K = (P⁻·h^T) / S
+        └──────┬───────┘
+               │
+        ┌──────────────┐
+        │ UPDATE       │  x̂ = x̂⁻ + K·γ
+        │              │  P = (I - K·h)·P⁻
+        └──────┬───────┘
+               │
+        ┌──────────────────┐
+        │ CONVERT OUTPUT   │  Â = exp(μ̂ + P₁₁/2)
+        │                  │  Rate = μ̇·100 (%/frame)
+        │                  │  CI = [exp(μ̂±√P₁₁)]
+        └──────┬───────────┘
+               │
+OUTPUT: Area [px²], Rate [%/frame], Confidence Band
+
+
+════════════════════════════════════════════════════════════════════════════════
+                         For Presentation
+════════════════════════════════════════════════════════════════════════════════
+
+Recommended color scheme:
+  • PREDICT phase: 🔵 Blue
+  • UPDATE phase:  🟢 Green
+  • OUTPUT:        🔴 Red
+
+Key metrics to highlight:
+  • Noise reduction: (σ_raw - σ_filtered) / σ_raw × 100
+  • Consumption rate: d(log A)/dt in %/sec
+  • Confidence interval width: (upper - lower) / mean × 100
+
+Real data example plots:
+  • Raw vs Filtered: overlay with confidence band
+  • Consumption rate histogram: show distribution of μ̇ values
+  • Prediction error: compare 1-step ahead predictions vs actuals
+
+════════════════════════════════════════════════════════════════════════════════

@@ -63,8 +63,32 @@ class DetectionPayload(BaseModel):
     height: float = Field(ge=0.0, le=1.0)
 
 
+class DetectorResult(BaseModel):
+    """Results from a single detector (YOLO or RF-DETR)."""
+
+    model_name: str = Field(description="Detector model name (yolo, rfdetr)")
+    inference_ms: float = Field(ge=0.0)
+    detections: list[DetectionPayload] = Field(default_factory=list)
+
+
+class FeedAreaData(BaseModel):
+    """Feed area analysis data for the current frame."""
+
+    raw_area: float = Field(ge=0.0, description="Raw feed area in pixels")
+    kalman_area: float = Field(ge=0.0, description="Kalman-filtered feed area")
+    detection_count: int = Field(ge=0, description="Number of feed detections")
+
+
+class FeedAnalysisHistory(BaseModel):
+    """Historical feed area analysis for plotting."""
+
+    frame_ids: list[int] = Field(default_factory=list)
+    raw_areas: list[float] = Field(default_factory=list)
+    kalman_areas: list[float] = Field(default_factory=list)
+
+
 class DetectionsMessage(BaseModel):
-    schema_: str = Field("detections.v1", alias="schema")
+    schema_: str = Field("detections.v2", alias="schema")
     type: str = "detections"
     source_id: str
     frame_id: int
@@ -74,6 +98,9 @@ class DetectionsMessage(BaseModel):
     stream_status: StreamStatus
     detection_status: DetectionHealthStatus
     detections: list[DetectionPayload] = Field(default_factory=list)
+    detectors: list[DetectorResult] = Field(default_factory=list, description="Results from multiple detectors")
+    feed_area: Optional[FeedAreaData] = None
+    feed_analysis: Optional[FeedAnalysisHistory] = None
     message: Optional[str] = None
 
     model_config = {"populate_by_name": True}
