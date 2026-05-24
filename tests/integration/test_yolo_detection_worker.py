@@ -1,4 +1,4 @@
-"""Integration tests: YOLO detection worker broadcasts detections.v1 WebSocket messages.
+"""Integration tests: YOLO detection worker broadcasts detections.v2 WebSocket messages.
 
 Mocks `YOLODetector.detect()` to return a synthetic 2-detection `DetectionResult`
 so no GPU or model file is required.
@@ -55,15 +55,14 @@ def _make_detection_result() -> DetectionResult:
 
 @pytest.mark.asyncio
 async def test_broadcast_contains_detections_v1_schema() -> None:
-    """One detection loop iteration must produce a detections.v1 WebSocket message."""
+    """One detection loop iteration must produce a detections.v2 WebSocket message."""
     worker = DetectionWorker()
 
     mock_detector = MagicMock()
     mock_detector.detect.return_value = _make_detection_result()
-    worker._detector = mock_detector
+    worker._yolo_detector = mock_detector
 
     broadcast_calls: list[dict] = []
-    original_broadcast = overlay_hub.broadcast
 
     def capture_broadcast(msg: dict) -> None:
         broadcast_calls.append(msg)
@@ -99,14 +98,15 @@ async def test_broadcast_contains_detections_v1_schema() -> None:
             image=fake_frame.image,
         )
         result = _make_detection_result()
+        feed_snapshot = worker._feed_analyzer.analyze_frame(result)
         worker._session = session
         worker._session.detection_status = DetectionHealthStatus.ACTIVE
-        await worker._broadcast_overlay(video_frame, result, now_ms)
+        await worker._broadcast_overlay(video_frame, result, None, feed_snapshot, now_ms)
 
-    # Assert a detections.v1 message was broadcast
+    # Assert a detections.v2 message was broadcast
     assert len(broadcast_calls) == 1
     msg = broadcast_calls[0]
-    assert msg["schema"] == "detections.v1"
+    assert msg["schema"] == "detections.v2"
 
 
 @pytest.mark.asyncio
@@ -125,18 +125,20 @@ async def test_broadcast_detections_list_has_correct_fields() -> None:
         image=np.zeros((480, 640, 3), dtype=np.uint8),
     )
     result = _make_detection_result()
+    feed_snapshot = worker._feed_analyzer.analyze_frame(result)
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
     broadcast_calls: list[dict] = []
     with patch.object(overlay_hub, "broadcast", side_effect=lambda m: broadcast_calls.append(m)):
         worker._session = session
         worker._session.detection_status = DetectionHealthStatus.ACTIVE
-        await worker._broadcast_overlay(video_frame, result, now_ms)
+        await worker._broadcast_overlay(video_frame, result, None, feed_snapshot, now_ms)
 
     assert len(broadcast_calls) == 1
     msg = broadcast_calls[0]
     dets = msg["detections"]
     assert len(dets) == 2
+    assert msg["detectors"][0]["model_name"] == "yolo"
 
     fish = next(d for d in dets if d["class_name"] == "fish")
     feed = next(d for d in dets if d["class_name"] == "feed")
@@ -178,11 +180,12 @@ async def test_broadcast_empty_detections_is_valid() -> None:
     with patch.object(overlay_hub, "broadcast", side_effect=lambda m: broadcast_calls.append(m)):
         worker._session = session
         worker._session.detection_status = DetectionHealthStatus.ACTIVE
-        await worker._broadcast_overlay(video_frame, empty_result, 12345)
+        feed_snapshot = worker._feed_analyzer.analyze_frame(empty_result)
+        await worker._broadcast_overlay(video_frame, empty_result, None, feed_snapshot, 12345)
 
     assert len(broadcast_calls) == 1
     assert broadcast_calls[0]["detections"] == []
-    assert broadcast_calls[0]["schema"] == "detections.v1"
+    assert broadcast_calls[0]["schema"] == "detections.v2"
 
 
 def test_missing_yolo_model_path_sets_unavailable_without_fallback(monkeypatch) -> None:
@@ -192,7 +195,7 @@ def test_missing_yolo_model_path_sets_unavailable_without_fallback(monkeypatch) 
 
     worker._load_detector()
 
-    assert worker._detector is None
+    assert worker._yolo_detector is None
     assert worker._session.detection_status == DetectionHealthStatus.UNAVAILABLE
     assert worker.status_message == "Detection model unavailable"
 
@@ -205,7 +208,7 @@ def test_failed_yolo_model_load_uses_safe_message(monkeypatch) -> None:
     with patch("core.infer.detector.YOLODetector.load", side_effect=RuntimeError("raw /tmp/secret traceback")):
         worker._load_detector()
 
-    assert worker._detector is None
+    assert worker._yolo_detector is None
     assert worker._session.detection_status == DetectionHealthStatus.UNAVAILABLE
     assert worker.status_message == "Detection model unavailable"
     assert "/tmp/secret" not in worker.status_message
@@ -235,7 +238,7 @@ def test_missing_stream_frames_sets_detection_source_unavailable() -> None:
     worker = DetectionWorker()
     worker._session = MagicMock()
     worker._session.stream_status = StreamStatus.STREAM_UNAVAILABLE
-    worker._detector = object()
+    worker._yolo_detector = object()
 
     worker._sync_detection_state_for_frame_source(has_frame=False)
 
@@ -254,7 +257,7 @@ def test_duplicate_frame_id_is_not_processed_twice() -> None:
 def test_duplicate_frame_refreshes_stale_detection_status() -> None:
     now = datetime.now(timezone.utc)
     worker = DetectionWorker()
-    worker._detector = object()
+    worker._yolo_detector = object()
     worker._session = LiveStreamSession(
         session_id="session-1",
         source_id="cam",
