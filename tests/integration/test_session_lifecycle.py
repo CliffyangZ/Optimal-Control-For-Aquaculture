@@ -7,7 +7,8 @@ from web.detection_worker import DetectionWorker
 
 
 @pytest.fixture
-def worker():
+def worker(monkeypatch):
+    monkeypatch.setattr("config.setting.RFDETR_MODEL_PATH", "")
     return DetectionWorker()
 
 

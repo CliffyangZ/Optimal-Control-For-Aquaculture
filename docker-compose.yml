@@ -9,14 +9,13 @@ services:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
-      - YOLO_MODEL_PATH=${YOLO_MODEL_PATH}
-      - YOLO_DEVICE=${YOLO_DEVICE:-cpu}
-      - YOLO_CONFIDENCE_THRESHOLD=${YOLO_CONFIDENCE_THRESHOLD:-0.5}
+      - RFDETR_MODEL_PATH=${RFDETR_MODEL_PATH}
+      - RFDETR_DEVICE=${RFDETR_DEVICE:-auto}
+      - RFDETR_CONFIDENCE_THRESHOLD=${RFDETR_CONFIDENCE_THRESHOLD:-0.25}
       - STREAM_URL=${STREAM_URL}
       - MEDIAMTX_HOST=${MEDIAMTX_HOST}
       - MEDIAMTX_WEBRTC_PORT=${MEDIAMTX_WEBRTC_PORT:-8889}
       - SOURCE_ID=${SOURCE_ID:-cam}
-      - RFDETR_MODEL_PATH=${RFDETR_MODEL_PATH}
     volumes:
       - ./models:/app/models:ro
       - ./logs:/app/logs
@@ -32,7 +31,7 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: ./web/frontend
       dockerfile: Dockerfile
     ports:
       - "5173:5173"

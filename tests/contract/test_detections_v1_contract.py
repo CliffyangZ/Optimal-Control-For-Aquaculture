@@ -38,9 +38,11 @@ def test_detection_payload_valid_class_names() -> None:
         assert p.class_name == name
 
 
-def test_detection_payload_rejects_invalid_class_name() -> None:
-    with pytest.raises(ValidationError):
-        DetectionPayload(class_name="shrimp", confidence=0.9, x=0.1, y=0.1, width=0.1, height=0.1)
+def test_detection_payload_accepts_model_returned_class_names() -> None:
+    payload = DetectionPayload(class_name="shrimp", class_index=9, confidence=0.9, x=0.1, y=0.1, width=0.1, height=0.1)
+
+    assert payload.class_name == "shrimp"
+    assert payload.class_index == 9
 
 
 def test_detection_payload_bbox_clamped_to_zero_one() -> None:
@@ -151,5 +153,5 @@ def test_to_ws_dict_detection_payload_keys() -> None:
     msg = DetectionsMessage(**_valid_message(detections=[det]))
     ws = msg.to_ws_dict()
     d = ws["detections"][0]
-    for key in ("class_name", "confidence", "x", "y", "width", "height"):
+    for key in ("class_name", "class_index", "confidence", "x", "y", "width", "height"):
         assert key in d, f"Missing key '{key}' in detection payload"

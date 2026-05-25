@@ -5,7 +5,8 @@
 ### 後端
 
 ```bash
-export YOLO_MODEL_PATH=/absolute/path/to/approved-model.pt
+export RFDETR_MODEL_PATH=/absolute/path/to/rf-detr-fish.pth
+export STREAM_URL=rtsp://127.0.0.1:8554/cam
 uv run --group ml uvicorn web.app:app --host 0.0.0.0 --port 8000
 ```
 
@@ -32,10 +33,10 @@ npm run dev
 ```text
 Aquaculture_CV_Project/
 ├── config/
-│   └── setting.py                              # Stream and approved YOLO runtime settings
+│   └── setting.py                              # Stream and RF-DETR runtime settings
 ├── core/
 │   ├── infer/
-│   │   └── detector.py                         # Approved YOLO detection inference
+│   │   └── rfdetr_detector.py                  # RF-DETR detection inference
 │   ├── models.py                               # Web session, stream, and detection statuses
 │   └── stream_health.py
 ├── drivers/
@@ -47,7 +48,7 @@ Aquaculture_CV_Project/
 │   │   ├── test_overlay_payloads.py
 │   │   └── test_module_boundaries.py
 │   └── integration/
-│       ├── test_yolo_detection_worker.py
+│       ├── test_yolo_detection_worker.py       # RF-DETR web worker regression tests
 │       └── test_monitoring_ui_contract.py
 ├── validation/
 │   ├── clip_manifest.py
