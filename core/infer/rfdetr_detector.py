@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from inspect import Parameter, signature
 from pathlib import Path
 
 import numpy as np
@@ -20,9 +21,29 @@ from core.types import Detection, DetectionResult
 class RFDETRDetector:
     """Wraps a loaded RF-DETR model and exposes `detect(frame) -> DetectionResult`."""
 
-    def __init__(self, model, conf_threshold: float) -> None:
+    def __init__(
+        self,
+        model,
+        conf_threshold: float,
+        *,
+        predict_shape: tuple[int, int] | None = None,
+        include_source_image: bool = False,
+    ) -> None:
         self._model = model
         self._conf_threshold = conf_threshold
+        self._predict_shape = predict_shape
+        self._include_source_image = include_source_image
+        self._predict_accepts_kwargs = self._detect_predict_kwargs_support(model)
+
+    @staticmethod
+    def _detect_predict_kwargs_support(model) -> set[str] | None:
+        try:
+            parameters = signature(model.predict).parameters
+        except (TypeError, ValueError):
+            return None
+        if any(param.kind == Parameter.VAR_KEYWORD for param in parameters.values()):
+            return None
+        return set(parameters)
 
     @classmethod
     def load(
@@ -30,6 +51,13 @@ class RFDETRDetector:
         model_path: str | Path,
         device: str = "cpu",
         conf_threshold: float = YOLO_CONFIDENCE_THRESHOLD,
+        *,
+        optimize: bool = True,
+        compile: bool = True,
+        dtype: str | torch.dtype = torch.float32,
+        resolution: int | None = None,
+        predict_shape: tuple[int, int] | None = None,
+        include_source_image: bool = False,
     ) -> "RFDETRDetector":
         """Load an RF-DETR model from checkpoint."""
         import warnings
@@ -58,12 +86,18 @@ class RFDETRDetector:
         # Set device in the model's internal ModelContext
         if hasattr(model, 'model') and hasattr(model.model, 'device'):
             model.model.device = torch.device(device)
+        if resolution is not None and hasattr(model, 'model') and hasattr(model.model, 'resolution'):
+            model.model.resolution = resolution
 
-        # Optimize for faster inference (10-15% latency improvement)
-        if hasattr(model, 'optimize_for_inference'):
-            model.optimize_for_inference()
+        if optimize and hasattr(model, 'optimize_for_inference'):
+            model.optimize_for_inference(compile=compile, dtype=dtype)
 
-        return cls(model, conf_threshold)
+        return cls(
+            model,
+            conf_threshold,
+            predict_shape=predict_shape,
+            include_source_image=include_source_image,
+        )
 
     def detect(self, raw_frame: np.ndarray, frame_id: int = 0) -> DetectionResult:
         """Run inference on a single BGR frame and return normalized detections."""
@@ -72,11 +106,21 @@ class RFDETRDetector:
         # RF-DETR expects RGB, convert from BGR
         rgb_frame = raw_frame[..., ::-1].copy()
 
-        # Run prediction
-        detections = self._model.predict(
-            rgb_frame,
-            threshold=self._conf_threshold
-        )
+        predict_kwargs = {
+            "threshold": self._conf_threshold,
+            "include_source_image": self._include_source_image,
+        }
+        if self._predict_shape is not None:
+            predict_kwargs["shape"] = self._predict_shape
+        if self._predict_accepts_kwargs is not None:
+            predict_kwargs = {
+                key: value
+                for key, value in predict_kwargs.items()
+                if key in self._predict_accepts_kwargs
+            }
+
+        with torch.inference_mode():
+            detections = self._model.predict(rgb_frame, **predict_kwargs)
 
         inference_ms = (time.monotonic() - t0) * 1000.0
 
