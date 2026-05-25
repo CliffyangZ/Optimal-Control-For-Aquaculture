@@ -74,3 +74,6 @@ IDLE_SHUTDOWN_DELAY_SECONDS = 10
 BACKEND_HOST = "0.0.0.0"
 BACKEND_PORT = 8000
 FRONTEND_DIST_DIR = "web/frontend/dist"
+
+# Pi controller API (used by Streamlit Feed button)
+PI_CONTROLLER_URL = os.environ.get("PI_CONTROLLER_URL", "http://192.168.137.100:8080")

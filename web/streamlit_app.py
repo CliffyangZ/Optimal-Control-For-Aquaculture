@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Optional
 
 import cv2
+import plotly.graph_objects as go
+import requests
 import streamlit as st
 
 # Load .env before importing project modules that read settings
 from config.setting import (
+    PI_CONTROLLER_URL,
     RFDETR_CONFIDENCE_THRESHOLD,
     RFDETR_DEVICE,
     RFDETR_MODEL_PATH,
@@ -38,6 +42,108 @@ st.set_page_config(
 
 _TARGET_DISPLAY_FPS = 30
 _DISPLAY_INTERVAL = 1.0 / _TARGET_DISPLAY_FPS
+_CHART_UPDATE_INTERVAL = 0.5  # seconds between chart refreshes
+
+_HUNGER_COLORS = {"Mild": "#2ecc71", "Moderate": "#f39c12", "Severe": "#e74c3c"}
+_HUNGER_LABELS = {
+    "Mild": "輕度 (Mild)",
+    "Moderate": "中度 (Moderate)",
+    "Severe": "重度 (Severe)",
+}
+
+
+def _trigger_manual_feed(pi_url: str) -> tuple[bool, str]:
+    """POST /feed to the Raspberry Pi controller. Returns (success, message)."""
+    url = pi_url.rstrip("/") + "/feed"
+    try:
+        resp = requests.post(url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            bmduino = data.get("bmduino", [])
+            suffix = f" BMduino: {' | '.join(bmduino)}" if bmduino else ""
+            return True, f"餵食訊號已送出。{suffix}"
+        data = resp.json()
+        return False, data.get("detail", {}).get("message", resp.text) if isinstance(data.get("detail"), dict) else str(data.get("detail", resp.text))
+    except requests.exceptions.ConnectionError:
+        return False, f"無法連線到 Pi ({pi_url})"
+    except requests.exceptions.Timeout:
+        return False, "連線逾時"
+    except Exception as e:
+        return False, str(e)
+
+
+def _build_area_chart(data: dict) -> go.Figure:
+    """Build the feed area chart with Raw / Kalman / EMA lines."""
+    frame_ids = data["frame_ids"]
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=frame_ids, y=data["raw"],
+        name="Raw (RF-DETR)", mode="lines",
+        line=dict(color="rgba(180,40,40,0.45)", width=1),
+    ))
+    fig.add_trace(go.Scatter(
+        x=frame_ids, y=data["kalman"],
+        name="Kalman Filter", mode="lines",
+        line=dict(color="#3498db", width=1.8),
+    ))
+    fig.add_trace(go.Scatter(
+        x=frame_ids, y=data["ema"],
+        name="EMA", mode="lines",
+        line=dict(color="#e67e22", width=2.5),
+    ))
+
+    fig.update_layout(
+        title="Feed Area / Frame",
+        xaxis_title="Frame",
+        yaxis_title="Feed Area (px²)",
+        yaxis=dict(tickformat=".0f"),
+        legend=dict(orientation="h", y=1.12),
+        margin=dict(l=50, r=20, t=50, b=40),
+        height=280,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)"),
+    )
+    return fig
+
+
+def _build_rate_chart(data: dict) -> go.Figure:
+    """Build the consumption rate chart with hunger zone bands."""
+    frame_ids = data["frame_ids"]
+    rates = data["consumption_rate"]
+
+    fig = go.Figure()
+
+    # Hunger zone background bands
+    fig.add_hrect(y0=-0.05, y1=0.5,  fillcolor="rgba(46,204,113,0.12)", line_width=0, annotation_text="Mild",     annotation_position="top right")
+    fig.add_hrect(y0=-0.10, y1=-0.05, fillcolor="rgba(243,156,18,0.15)", line_width=0, annotation_text="Moderate", annotation_position="right")
+    fig.add_hrect(y0=-0.5,  y1=-0.10, fillcolor="rgba(231,76,60,0.15)",  line_width=0, annotation_text="Severe",   annotation_position="right")
+
+    # Threshold lines
+    fig.add_hline(y=-0.05, line_dash="dash", line_color="rgba(46,204,113,0.7)",  line_width=1.5)
+    fig.add_hline(y=-0.10, line_dash="dash", line_color="rgba(231,76,60,0.7)",   line_width=1.5)
+
+    # Consumption rate line
+    fig.add_trace(go.Scatter(
+        x=frame_ids, y=rates,
+        name="Consumption rate (windowed)", mode="lines",
+        line=dict(color="#e74c3c", width=2),
+    ))
+
+    fig.update_layout(
+        title="Consumption Rate & Hunger Zones",
+        xaxis_title="Frame",
+        yaxis_title="Rate (log/frame)",
+        yaxis=dict(range=[-0.35, 0.15]),
+        legend=dict(orientation="h", y=1.12),
+        margin=dict(l=50, r=20, t=50, b=40),
+        height=240,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)"),
+    )
+    return fig
 
 # ---------------------------------------------------------------------------
 # Sidebar – controls
@@ -91,9 +197,26 @@ with st.sidebar:
     show_conf_score = st.checkbox("Show confidence score", value=True)
 
     st.divider()
+    st.subheader("餵食控制")
+    pi_url = st.text_input("Pi Controller URL", value=PI_CONTROLLER_URL)
+    feed_clicked = st.button("🐟 立即餵食", use_container_width=True, type="primary")
+    feed_status = st.empty()
+
+    st.divider()
     col_start, col_stop = st.columns(2)
     start_clicked = col_start.button("▶ Start", use_container_width=True, type="primary")
     stop_clicked = col_stop.button("■ Stop", use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Feed button handler (runs on each rerun before the display loop)
+# ---------------------------------------------------------------------------
+
+if feed_clicked:
+    ok, msg = _trigger_manual_feed(pi_url)
+    if ok:
+        feed_status.success(msg)
+    else:
+        feed_status.error(msg)
 
 # ---------------------------------------------------------------------------
 # Session state – pipeline lifecycle
@@ -109,6 +232,10 @@ if "display_fps" not in st.session_state:
     st.session_state.display_fps = 0.0
 if "display_fps_t0" not in st.session_state:
     st.session_state.display_fps_t0 = time.monotonic()
+if "chart_t0" not in st.session_state:
+    st.session_state.chart_t0 = time.monotonic()
+if "chart_gen" not in st.session_state:
+    st.session_state.chart_gen = 0
 
 # Handle start
 if start_clicked and not st.session_state.running:
@@ -169,6 +296,12 @@ video_placeholder = st.empty()
 # Status placeholder
 status_placeholder = st.empty()
 
+# Feed analysis chart section
+st.markdown("### Feed Area Analysis")
+hunger_badge = st.empty()
+area_chart_placeholder = st.empty()
+rate_chart_placeholder = st.empty()
+
 # ---------------------------------------------------------------------------
 # Display loop (runs while the pipeline is active)
 # ---------------------------------------------------------------------------
@@ -215,6 +348,39 @@ if st.session_state.running and st.session_state.pipeline:
             st.session_state.display_fps_counter = 0
             st.session_state.display_fps_t0 = now
         metric_display_fps.metric("Display FPS", f"{st.session_state.display_fps:.1f}")
+
+        # Update feed area charts at ~2 FPS to keep UI responsive
+        chart_elapsed = now - st.session_state.chart_t0
+        if chart_elapsed >= _CHART_UPDATE_INTERVAL:
+            st.session_state.chart_t0 = now
+            st.session_state.chart_gen += 1
+            gen = st.session_state.chart_gen
+
+            snapshot = pipeline.get_latest_snapshot()
+            chart_data = pipeline.get_chart_data()
+
+            if snapshot is not None:
+                level = snapshot.hunger_level
+                color = _HUNGER_COLORS.get(level, "#aaa")
+                label = _HUNGER_LABELS.get(level, level)
+                hunger_badge.markdown(
+                    f"**Hunger Level:** "
+                    f"<span style='color:{color};font-weight:bold;font-size:1.1em'>{label}</span>"
+                    f"&nbsp;&nbsp;&nbsp;rate = {snapshot.consumption_rate:+.4f} log/frame",
+                    unsafe_allow_html=True,
+                )
+
+            if chart_data["frame_ids"]:
+                area_chart_placeholder.plotly_chart(
+                    _build_area_chart(chart_data),
+                    use_container_width=True,
+                    key=f"area_{gen}",
+                )
+                rate_chart_placeholder.plotly_chart(
+                    _build_rate_chart(chart_data),
+                    use_container_width=True,
+                    key=f"rate_{gen}",
+                )
 
         # Pace display to 30 FPS
         spent = time.monotonic() - t0
