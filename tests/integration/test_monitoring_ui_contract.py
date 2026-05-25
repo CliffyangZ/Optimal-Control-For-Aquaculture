@@ -38,7 +38,8 @@ def test_active_empty_detection_payload_clears_boxes() -> None:
 
 
 def test_detection_payload_contains_raw_labels_and_confidence() -> None:
-    payload = DetectionPayload(class_name="lumpfish", confidence=0.93, x=0.1, y=0.2, width=0.3, height=0.4)
+    payload = DetectionPayload(class_name="shrimp", class_index=9, confidence=0.93, x=0.1, y=0.2, width=0.3, height=0.4)
 
-    assert payload.class_name == "lumpfish"
+    assert payload.class_name == "shrimp"
+    assert payload.class_index == 9
     assert payload.confidence == pytest.approx(0.93)

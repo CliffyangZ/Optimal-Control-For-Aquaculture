@@ -17,7 +17,7 @@ def test_hub_broadcast_reaches_subscribers():
 
 
 def test_hub_latest_value_replaces_stale_on_full_queue():
-    hub = OverlayHub()
+    hub = OverlayHub(queue_maxsize=1)
     q = hub.subscribe("v1")
     old = {"type": "overlay", "frame_id": 1}
     new = {"type": "overlay", "frame_id": 2}
@@ -49,7 +49,7 @@ def test_hub_broadcast_to_multiple_subscribers():
 
 
 def test_hub_close_all_sends_none_sentinel():
-    hub = OverlayHub()
+    hub = OverlayHub(queue_maxsize=1)
     q = hub.subscribe("v1")
     hub.broadcast({"type": "overlay", "frame_id": 1})
     hub.close_all()

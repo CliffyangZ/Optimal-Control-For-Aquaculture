@@ -1,0 +1,1 @@
+"""Web monitoring application package."""

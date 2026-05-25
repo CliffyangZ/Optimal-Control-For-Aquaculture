@@ -80,7 +80,7 @@ async def test_status_stream_status_is_valid_enum(client):
 @pytest.mark.asyncio
 async def test_status_detection_status_is_valid_enum(client):
     r = await client.get("/status")
-    valid = {"ok", "delayed", "degraded", "unavailable"}
+    valid = {"loading", "active", "stale", "unavailable"}
     assert r.json()["detection_status"] in valid
 
 
@@ -123,7 +123,6 @@ async def test_session_stop_returns_session_status(client):
 @pytest.mark.asyncio
 async def test_session_stop_with_viewer_id(client):
     start = await client.post("/session/start")
-    msg = start.json().get("message", "")
-    viewer_id = msg.split("viewer_id:")[1] if "viewer_id:" in msg else None
+    viewer_id = start.json().get("viewer_id")
     r = await client.post("/session/stop", json={"viewer_id": viewer_id})
     assert r.status_code == 200

@@ -7,7 +7,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from core.models import CurrentFrame
-from config.setting import TARGET_WIDTH, TARGET_HEIGHT, INTERRUPTION_TIMEOUT_SECONDS
+from config.setting import INTERRUPTION_TIMEOUT_SECONDS
 
 
 class LatestFrameBuffer:
@@ -93,31 +93,18 @@ class LatestFrameReader:
                 continue
 
             self._consecutive_failures = 0
-            frame = self._letterbox_resize(frame, (TARGET_WIDTH, TARGET_HEIGHT))
             self._sequence_number += 1
             self._last_frame_time = datetime.now(timezone.utc)
+            source_height, source_width = frame.shape[:2]
 
             current_frame = CurrentFrame(
                 image=frame,
                 captured_at=self._last_frame_time,
                 sequence_number=self._sequence_number,
-                source_width=TARGET_WIDTH,
-                source_height=TARGET_HEIGHT
+                source_width=source_width,
+                source_height=source_height
             )
             self.buffer.put(current_frame)
-
-    def _letterbox_resize(self, frame, target_size: tuple) -> np.ndarray:
-        """Resize frame preserving aspect ratio with letterboxing."""
-        h, w = frame.shape[:2]
-        target_w, target_h = target_size
-        scale = min(target_w / w, target_h / h)
-        new_w, new_h = int(w * scale), int(h * scale)
-        resized = cv2.resize(frame, (new_w, new_h))
-        top = (target_h - new_h) // 2
-        left = (target_w - new_w) // 2
-        bottom = target_h - new_h - top
-        right = target_w - new_w - left
-        return cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
 
     def _start_capture(self) -> None:
         """Open RTSP connection with optimized buffer settings."""

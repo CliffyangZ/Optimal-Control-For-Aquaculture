@@ -1,64 +1,53 @@
-"""In-memory latest-value WebSocket subscriber hub."""
+"""Latest-value broadcast hub for overlay WebSocket subscribers."""
+
+from __future__ import annotations
 
 import asyncio
-import json
-import logging
-from typing import Optional
 
-logger = logging.getLogger(__name__)
+from config.setting import OVERLAY_HUB_QUEUE_MAXSIZE
 
 
 class OverlayHub:
-    """Broadcasts the latest overlay payload to all connected WebSocket clients.
-
-    Uses latest-value semantics: slow clients get the newest message, not a backlog.
-    Each subscriber gets a bounded asyncio.Queue(maxsize=1). If the queue is full
-    the oldest item is discarded before the new one is added so detection is never blocked.
-    """
-
-    def __init__(self) -> None:
-        self._subscribers: dict[str, asyncio.Queue[Optional[dict]]] = {}
-
-    def subscribe(self, viewer_id: str) -> asyncio.Queue[Optional[dict]]:
-        q: asyncio.Queue[Optional[dict]] = asyncio.Queue(maxsize=1)
-        self._subscribers[viewer_id] = q
-        logger.debug("overlay_hub: subscribed viewer=%s total=%d", viewer_id, len(self._subscribers))
-        return q
-
-    def unsubscribe(self, viewer_id: str) -> None:
-        self._subscribers.pop(viewer_id, None)
-        logger.debug("overlay_hub: unsubscribed viewer=%s total=%d", viewer_id, len(self._subscribers))
-
-    def broadcast(self, payload: dict) -> None:
-        """Publish payload to all subscribers without blocking."""
-        for viewer_id, q in list(self._subscribers.items()):
-            try:
-                if q.full():
-                    try:
-                        q.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
-                q.put_nowait(payload)
-            except Exception:
-                logger.warning("overlay_hub: failed to enqueue for viewer=%s", viewer_id)
-
-    def close_all(self) -> None:
-        """Signal all subscribers to stop by sending None sentinel."""
-        for q in self._subscribers.values():
-            try:
-                if q.full():
-                    try:
-                        q.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
-                q.put_nowait(None)
-            except Exception:
-                pass
-        self._subscribers.clear()
+    def __init__(self, queue_maxsize: int = OVERLAY_HUB_QUEUE_MAXSIZE) -> None:
+        self._queue_maxsize = queue_maxsize
+        self._subscribers: dict[str, asyncio.Queue] = {}
 
     @property
     def subscriber_count(self) -> int:
         return len(self._subscribers)
+
+    def subscribe(self, viewer_id: str) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=self._queue_maxsize)
+        self._subscribers[viewer_id] = queue
+        return queue
+
+    def unsubscribe(self, viewer_id: str) -> None:
+        self._subscribers.pop(viewer_id, None)
+
+    def broadcast(self, payload: dict | None) -> None:
+        for queue in list(self._subscribers.values()):
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                pass
+
+    def close_all(self) -> None:
+        for queue in list(self._subscribers.values()):
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            try:
+                queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+        self._subscribers.clear()
 
 
 overlay_hub = OverlayHub()

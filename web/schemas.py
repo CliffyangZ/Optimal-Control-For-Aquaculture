@@ -1,131 +1,90 @@
-"""FastAPI response and WebSocket payload schemas."""
+"""Pydantic schemas for the live RF-DETR monitoring API."""
 
 from __future__ import annotations
-from typing import Literal, Optional
-from pydantic import BaseModel, Field
 
-from core.models import StreamStatus, DetectionHealthStatus
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
+
+from core.models import DetectionHealthStatus, StreamStatus
 
 
-class RuntimeConfigResponse(BaseModel):
+class ConfigResponse(BaseModel):
     source_id: str
     webrtc_url: str
     overlay_ws_url: str
-    stale_overlay_ms: int = 500
-    local_trusted_network_only: bool = True
-    primary_browser_support: str = "Chrome and Edge are primary validation targets."
+    stale_overlay_ms: int
+    local_trusted_network_only: bool
+    detector_model_configured: bool
+    confidence_threshold: float
+    device: str
 
 
 class SessionStatusResponse(BaseModel):
     source_id: str
     stream_status: StreamStatus
     detection_status: DetectionHealthStatus
-    active_viewer_count: int = Field(ge=0)
-    started_at: Optional[str] = None
-    last_frame_at: Optional[str] = None
-    last_overlay_at: Optional[str] = None
+    active_viewer_count: int
     detection_fps: float = 0.0
-    message: Optional[str] = None
+    last_frame_at: str | None = None
+    last_overlay_at: str | None = None
+    message: str = ""
+    viewer_id: str | None = None
 
 
-class StopSessionRequest(BaseModel):
-    viewer_id: Optional[str] = None
+class SessionStopRequest(BaseModel):
+    viewer_id: str | None = None
 
 
-# --- WebSocket client message schemas ---
-
-class ViewerHelloMessage(BaseModel):
-    type: str = "viewer.hello"
+class HeartbeatRequest(BaseModel):
     viewer_id: str
-    overlay_enabled: bool = True
-
-
-class ViewerHeartbeatMessage(BaseModel):
-    type: str = "viewer.heartbeat"
-    viewer_id: str
-    timestamp_ms: int
-
-
-class ViewerStopMessage(BaseModel):
-    type: str = "viewer.stop"
-    viewer_id: str
-
-
-# --- WebSocket server message schemas ---
 
 
 class DetectionPayload(BaseModel):
-    class_name: Literal["fish", "feed", "debris", "lumpfish"]
+    class_name: str = Field(min_length=1)
+    class_index: int | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     x: float = Field(ge=0.0, le=1.0)
     y: float = Field(ge=0.0, le=1.0)
     width: float = Field(ge=0.0, le=1.0)
     height: float = Field(ge=0.0, le=1.0)
 
-
-class DetectorResult(BaseModel):
-    """Results from a single detector (YOLO or RF-DETR)."""
-
-    model_name: str = Field(description="Detector model name (yolo, rfdetr)")
-    inference_ms: float = Field(ge=0.0)
-    detections: list[DetectionPayload] = Field(default_factory=list)
-
-
-class FeedAreaData(BaseModel):
-    """Feed area analysis data for the current frame."""
-
-    raw_area: float = Field(ge=0.0, description="Raw feed area in pixels")
-    kalman_area: float = Field(ge=0.0, description="Kalman-filtered feed area")
-    detection_count: int = Field(ge=0, description="Number of feed detections")
-
-
-class FeedAnalysisHistory(BaseModel):
-    """Historical feed area analysis for plotting."""
-
-    frame_ids: list[int] = Field(default_factory=list)
-    raw_areas: list[float] = Field(default_factory=list)
-    kalman_areas: list[float] = Field(default_factory=list)
+    @model_validator(mode="after")
+    def bbox_must_fit_unit_square(self) -> "DetectionPayload":
+        if self.x + self.width > 1.0 or self.y + self.height > 1.0:
+            raise ValueError("normalized detection bbox must fit within [0, 1]")
+        return self
 
 
 class DetectionsMessage(BaseModel):
-    schema_: str = Field("detections.v2", alias="schema")
-    type: str = "detections"
+    schema: Literal["detections.v1"] = "detections.v1"
+    type: Literal["detections"] = "detections"
     source_id: str
     frame_id: int
     timestamp_ms: int
-    source_width: int
-    source_height: int
+    source_width: int = Field(gt=0)
+    source_height: int = Field(gt=0)
     stream_status: StreamStatus
     detection_status: DetectionHealthStatus
-    detections: list[DetectionPayload] = Field(default_factory=list)
-    detectors: list[DetectorResult] = Field(default_factory=list, description="Results from multiple detectors")
-    feed_area: Optional[FeedAreaData] = None
-    feed_analysis: Optional[FeedAnalysisHistory] = None
-    message: Optional[str] = None
-
-    model_config = {"populate_by_name": True}
+    detections: list[DetectionPayload]
+    inference_ms: float = 0.0
+    detection_fps: float = 0.0
+    message: str = ""
 
     def to_ws_dict(self) -> dict:
-        d = self.model_dump(by_alias=True)
-        d["stream_status"] = self.stream_status.value
-        d["detection_status"] = self.detection_status.value
-        return d
+        return self.model_dump(mode="json")
 
 
 class StatusMessage(BaseModel):
-    schema_: str = Field("status.v1", alias="schema")
-    type: str = "status"
+    schema: Literal["status.v1"] = "status.v1"
+    type: Literal["status"] = "status"
     source_id: str
     timestamp_ms: int
     stream_status: StreamStatus
     detection_status: DetectionHealthStatus
-    active_viewer_count: int
-    message: Optional[str] = None
-
-    model_config = {"populate_by_name": True}
+    active_viewer_count: int = Field(ge=0)
+    detection_fps: float = 0.0
+    message: str = ""
 
     def to_ws_dict(self) -> dict:
-        d = self.model_dump(by_alias=True)
-        d["stream_status"] = self.stream_status.value
-        d["detection_status"] = self.detection_status.value
-        return d
+        return self.model_dump(mode="json")

@@ -1,6 +1,6 @@
-"""Integration tests: YOLO detection worker broadcasts detections.v1 WebSocket messages.
+"""Integration tests: RF-DETR detection worker broadcasts detections.v1 WebSocket messages.
 
-Mocks `YOLODetector.detect()` to return a synthetic 2-detection `DetectionResult`
+Mocks `RFDETRDetector.detect()` to return a synthetic 2-detection `DetectionResult`
 so no GPU or model file is required.
 """
 
@@ -63,7 +63,6 @@ async def test_broadcast_contains_detections_v1_schema() -> None:
     worker._detector = mock_detector
 
     broadcast_calls: list[dict] = []
-    original_broadcast = overlay_hub.broadcast
 
     def capture_broadcast(msg: dict) -> None:
         broadcast_calls.append(msg)
@@ -142,10 +141,11 @@ async def test_broadcast_detections_list_has_correct_fields() -> None:
     feed = next(d for d in dets if d["class_name"] == "feed")
 
     assert fish["confidence"] == pytest.approx(0.921, abs=0.001)
+    assert fish["class_index"] == 2
     assert feed["class_name"] == "feed"
 
     for d in dets:
-        for field in ("class_name", "confidence", "x", "y", "width", "height"):
+        for field in ("class_name", "class_index", "confidence", "x", "y", "width", "height"):
             assert field in d, f"Missing field '{field}' in detection"
 
 
@@ -185,33 +185,34 @@ async def test_broadcast_empty_detections_is_valid() -> None:
     assert broadcast_calls[0]["schema"] == "detections.v1"
 
 
-def test_missing_yolo_model_path_sets_unavailable_without_fallback(monkeypatch) -> None:
+def test_missing_rfdetr_model_path_sets_unavailable_without_fallback(monkeypatch) -> None:
     worker = DetectionWorker()
     worker._session = MagicMock()
-    monkeypatch.delenv("YOLO_MODEL_PATH", raising=False)
+    monkeypatch.setattr("config.setting.RFDETR_MODEL_PATH", "")
 
     worker._load_detector()
 
     assert worker._detector is None
     assert worker._session.detection_status == DetectionHealthStatus.UNAVAILABLE
-    assert worker.status_message == "Detection model unavailable"
+    assert worker.status_message == "RF-DETR model unavailable"
 
 
-def test_failed_yolo_model_load_uses_safe_message(monkeypatch) -> None:
+def test_failed_rfdetr_model_load_uses_safe_message(monkeypatch) -> None:
     worker = DetectionWorker()
     worker._session = MagicMock()
-    monkeypatch.setenv("YOLO_MODEL_PATH", "/tmp/secret/model.pt")
+    monkeypatch.setattr("config.setting.RFDETR_MODEL_PATH", "/tmp/secret/model.pt")
+    monkeypatch.setattr("pathlib.Path.exists", lambda self: True)
 
-    with patch("core.infer.detector.YOLODetector.load", side_effect=RuntimeError("raw /tmp/secret traceback")):
+    with patch("core.infer.rfdetr_detector.RFDETRDetector.load", side_effect=RuntimeError("raw /tmp/secret traceback")):
         worker._load_detector()
 
     assert worker._detector is None
     assert worker._session.detection_status == DetectionHealthStatus.UNAVAILABLE
-    assert worker.status_message == "Detection model unavailable"
+    assert worker.status_message == "RF-DETR model unavailable"
     assert "/tmp/secret" not in worker.status_message
 
 
-def test_unsupported_yolo_class_sets_class_mismatch_unavailable() -> None:
+def test_model_returned_classes_are_not_whitelisted() -> None:
     worker = DetectionWorker()
     worker._session = MagicMock()
     detection = Detection(
@@ -226,9 +227,7 @@ def test_unsupported_yolo_class_sets_class_mismatch_unavailable() -> None:
 
     result = worker._validated_detections([detection])
 
-    assert result == []
-    assert worker._session.detection_status == DetectionHealthStatus.UNAVAILABLE
-    assert worker.status_message == "Detection model class mismatch"
+    assert result == [detection]
 
 
 def test_missing_stream_frames_sets_detection_source_unavailable() -> None:
@@ -262,7 +261,7 @@ def test_duplicate_frame_refreshes_stale_detection_status() -> None:
         stream_status=StreamStatus.LIVE,
         detection_status=DetectionHealthStatus.ACTIVE,
         last_frame_at=now,
-        last_overlay_at=now - timedelta(seconds=2),
+        last_overlay_at=now - timedelta(seconds=4),
     )
 
     worker._refresh_detection_state(now)

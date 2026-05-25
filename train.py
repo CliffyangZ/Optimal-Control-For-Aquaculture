@@ -107,7 +107,8 @@ def _cmd_infer(args: argparse.Namespace) -> int:
     model_type = args.model_type
     if model_type == "auto":
         # Auto-detect based on file path patterns
-        if "rfdetr" in str(model_path).lower():
+        model_name = str(model_path).lower()
+        if "rfdetr" in model_name or "rf-detr" in model_name:
             model_type = "rfdetr"
         elif model_path.suffix == ".pt":
             model_type = "yolo"
@@ -284,7 +285,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_in.add_argument("--output", type=str, default=None, help="Output video path (optional; if not provided, only JSON output)")
     p_in.add_argument("--conf", type=float, default=0.70, help="Confidence threshold")
     p_in.add_argument("--device", type=str, default="cuda", help="Inference device (cuda/cpu/0)")
-    p_in.add_argument("--model-type", type=str, default="auto", choices=["auto", "yolo", "rfdetr"], help="Model type (auto-detect, yolo, or rfdetr)")
+    p_in.add_argument("--model-type", "--model_type", type=str, default="auto", choices=["auto", "yolo", "rfdetr"], help="Model type (auto-detect, yolo, or rfdetr)")
     p_in.set_defaults(func=_cmd_infer)
 
     return parser

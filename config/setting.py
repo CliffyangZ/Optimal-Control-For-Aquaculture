@@ -38,7 +38,7 @@ STREAM_URL = os.environ.get("STREAM_URL", DEFAULT_STREAM_URL)
 TARGET_WIDTH = 640
 TARGET_HEIGHT = 640
 TARGET_DISPLAY_FPS = 30
-TARGET_DETECTION_FPS = 10
+TARGET_DETECTION_FPS = 1  # RF-DETR inference ~1.2s per frame, targeting 1 FPS max
 INTERRUPTION_TIMEOUT_SECONDS = 3
 
 VALIDATION_MANIFEST_PATH = "validation/clips.local.yml"
@@ -51,10 +51,16 @@ MEDIAMTX_WEBRTC_PORT = _env_int("MEDIAMTX_WEBRTC_PORT", 8889)
 WEBRTC_PATH_TEMPLATE = "/{source_id}/whep"
 
 # Overlay / WebSocket
-STALE_OVERLAY_MS = 500
-OVERLAY_HUB_QUEUE_MAXSIZE = 1
+STALE_OVERLAY_MS = _env_int("STALE_OVERLAY_MS", 3000)
+OVERLAY_HUB_QUEUE_MAXSIZE = 5  # Increased to prevent message loss during slow inference
 
-# Approved YOLO web recognition
+# Approved RF-DETR web recognition
+RFDETR_MODEL_PATH = os.environ.get("RFDETR_MODEL_PATH", "")
+RFDETR_DEVICE = os.environ.get("RFDETR_DEVICE", "auto")
+RFDETR_CONFIDENCE_THRESHOLD = float(os.environ.get("RFDETR_CONFIDENCE_THRESHOLD", "0.25"))
+
+# Legacy YOLO training/experimentation settings. The rebuilt web detector uses
+# RFDETR_MODEL_PATH instead.
 YOLO_MODEL_PATH = os.environ.get("YOLO_MODEL_PATH", "")
 YOLO_DEVICE = os.environ.get("YOLO_DEVICE", "cpu")
 YOLO_SUPPORTED_CLASSES = ("fish", "lumpfish", "feed", "debris")
