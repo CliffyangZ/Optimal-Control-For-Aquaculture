@@ -39,7 +39,7 @@ def _make_training_config(local_cache: Path) -> TrainingConfig:
         model=ModelConfig(
             weights="yolo26s.pt",
             variant="yolo26s",
-            output_dir="runs/train",
+            output_dir="results/runs/train",
             epochs=1,
             batch=2,
             imgsz=320,

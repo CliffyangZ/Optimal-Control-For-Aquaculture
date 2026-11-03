@@ -75,9 +75,9 @@ class TestModuleBoundaries:
     def test_active_web_modules_do_not_import_legacy_detection_modules(self):
         forbidden = ("ripple", "activity", "heatmap", "spatiotemporal")
         active_modules = [
-            Path("web/app.py"),
-            Path("web/detection_worker.py"),
-            Path("web/schemas.py"),
+            Path("src/web/app.py"),
+            Path("src/web/detection_worker.py"),
+            Path("src/web/schemas.py"),
         ]
 
         for path in active_modules:

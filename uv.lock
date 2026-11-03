@@ -113,6 +113,7 @@ dependencies = [
     { name = "numpy" },
     { name = "opencv-python" },
     { name = "pandas" },
+    { name = "plotly" },
     { name = "pydantic" },
     { name = "pytest-asyncio" },
     { name = "pyyaml" },
@@ -120,6 +121,7 @@ dependencies = [
     { name = "roboflow" },
     { name = "scipy" },
     { name = "streamlit" },
+    { name = "streamlit-player" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
 ]
@@ -158,6 +160,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "opencv-python", specifier = ">=4.8.0" },
     { name = "pandas", specifier = ">=3.0.3" },
+    { name = "plotly", specifier = ">=6.7.0" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.4.0" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
@@ -167,6 +170,7 @@ requires-dist = [
     { name = "roboflow", specifier = ">=1.3.8" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "streamlit", specifier = ">=1.35.0" },
+    { name = "streamlit-player", specifier = ">=0.1.5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
     { name = "websockets", specifier = ">=12.0" },
 ]
@@ -1757,6 +1761,19 @@ wheels = [
 ]
 
 [[package]]
+name = "plotly"
+version = "6.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "narwhals" },
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3a/7f/0f100df1172aadf88a929a9dbb902656b0880ba4b960fe5224867159d8f4/plotly-6.7.0.tar.gz", hash = "sha256:45eea0ff27e2a23ccd62776f77eb43aa1ca03df4192b76036e380bb479b892c6", size = 6911286, upload-time = "2026-04-09T20:36:45.738Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/90/ad/cba91b3bcf04073e4d1655a5c1710ef3f457f56f7d1b79dcc3d72f4dd912/plotly-6.7.0-py3-none-any.whl", hash = "sha256:ac8aca1c25c663a59b5b9140a549264a5badde2e057d79b8c772ae2920e32ff0", size = 9898444, upload-time = "2026-04-09T20:36:39.812Z" },
+]
+
+[[package]]
 name = "pluggy"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2759,6 +2776,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5d/f8/b2daf7a5f8ae15527daf94406e771bb6075e958a01c3dde9eba79dc3c9a3/streamlit-1.57.0.tar.gz", hash = "sha256:0b028d305c1a1a757071b2c9504966787602842fc8af6e873795ca58d2b4d12f", size = 8678859, upload-time = "2026-04-28T22:13:32.238Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d8/1a/3ca2293d8552bacea3e67e9600d2d1df7df4a325059769ad83d91c279595/streamlit-1.57.0-py3-none-any.whl", hash = "sha256:0d1d41972aeade5637dbb0e7f0eefa5312272f85304923d240a1b1f0475249c8", size = 9194216, upload-time = "2026-04-28T22:13:29.624Z" },
+]
+
+[[package]]
+name = "streamlit-player"
+version = "0.1.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "streamlit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b2/4b/cd83390a98c36cde7a06cf1f427b7e32a41411b86205d3a521f84a6dcb1a/streamlit-player-0.1.5.tar.gz", hash = "sha256:7f27688fbdf6e385fd277cca00196e51a6e5cda7fc7c1a08098b0108508f5d0e", size = 582075, upload-time = "2020-12-17T18:59:05.304Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3c/6c/72bb49970e5db26fa65241ec98fb76856a4e2e0db8b32f8ebadab48e62ac/streamlit_player-0.1.5-py3-none-any.whl", hash = "sha256:69d635630293f0538983abbfb561feb31d3a11f1442ccf1d92c42303adfa8ff6", size = 1700760, upload-time = "2020-12-17T18:59:01.44Z" },
 ]
 
 [[package]]

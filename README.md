@@ -15,7 +15,7 @@ uv run --group ml uvicorn web.app:app --host 0.0.0.0 --port 8000
 ### 前端
 
 ```bash
-cd web/frontend
+cd src/web/frontend
 npm install
 npm run dev
 ```
@@ -24,7 +24,7 @@ npm run dev
 
 ### Inferencing cmd
 ```bash
- uv run python train.py infer --model models/rf-detr-fish-regular.pth --source data/toilet_test.mp4 --model-type rfdetr --output outputs/test_toilets.mp4 --conf 0.3
+ uv run python train.py infer --model models/rf-detr-fish-regular.pth --source data/toilet_test.mp4 --model-type rfdetr --output results/outputs/test_toilets.mp4 --conf 0.3
 ```
 
 
@@ -32,36 +32,45 @@ npm run dev
 
 ```text
 Aquaculture_CV_Project/
-├── config/
-│   └── setting.py                              # Stream and RF-DETR runtime settings
-├── core/
-│   ├── infer/
-│   │   └── rfdetr_detector.py                  # RF-DETR detection inference
-│   ├── models.py                               # Web session, stream, and detection statuses
-│   └── stream_health.py
-├── drivers/
-│   └── README.md
-├── streaming/
-│   └── latest_frame_reader.py
-├── tests/
-│   ├── unit/
-│   │   ├── test_overlay_payloads.py
-│   │   └── test_module_boundaries.py
-│   └── integration/
-│       ├── test_yolo_detection_worker.py       # RF-DETR web worker regression tests
-│       └── test_monitoring_ui_contract.py
-├── validation/
-│   ├── clip_manifest.py
-│   └── run_clip_validation.py
-└── web/
-    ├── app.py                                  # FastAPI backend
-    ├── detection_worker.py                     # Shared detection loop
-    ├── overlay_hub.py                          # WebSocket broadcast hub
-    ├── schemas.py                              # Pydantic API/WS schemas
-    └── frontend/                               # React/Vite UI
-        ├── src/
-        └── dist/                               # Built for production serving
+├── .github/
+│   └── Assets/                                 # Architecture diagrams
+├── Docs/
+├── results/
+│   ├── outputs/                                # Inference outputs
+│   ├── runs/                                   # Training runs
+│   └── wandb/                                  # Weights & Biases local logs
+├── src/
+│   ├── config/
+│   │   └── setting.py                          # Stream and RF-DETR runtime settings
+│   ├── core/
+│   │   ├── infer/
+│   │   │   └── rfdetr_detector.py              # RF-DETR detection inference
+│   │   ├── models.py                           # Web session, stream, and detection statuses
+│   │   └── stream_health.py
+│   ├── drivers/
+│   │   └── README.md
+│   ├── pi_controller/                          # Raspberry Pi feed controller submodule
+│   ├── streaming/
+│   │   └── latest_frame_reader.py
+│   ├── validation/
+│   │   ├── clip_manifest.py
+│   │   └── run_clip_validation.py
+│   └── web/
+│       ├── app.py                              # FastAPI backend
+│       ├── detection_worker.py                 # Shared detection loop
+│       ├── overlay_hub.py                      # WebSocket broadcast hub
+│       ├── schemas.py                          # Pydantic API/WS schemas
+│       └── frontend/                           # React/Vite UI
+│           ├── src/
+│           └── dist/                           # Built for production serving
+└── tests/
+    ├── unit/
+    └── integration/
 ```
+
+## YOLO Web Detection
+
+The project previously used YOLO-based object detection via a WebSocket overlay with `detections.v1` schema. This is **not the active web detection behavior** — the current production system uses RF-DETR for improved accuracy and performance on the target use case.
 
 ## Hardware Components
 

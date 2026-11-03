@@ -12,7 +12,7 @@ def test_root_readme_declares_current_yolo_source_of_truth() -> None:
 
 
 def test_web_readme_documents_compatibility_overlay_names() -> None:
-    content = Path("web/README.md").read_text(encoding="utf-8")
+    content = Path("src/web/README.md").read_text(encoding="utf-8")
 
     assert "approved YOLO object detection" in content
     assert "overlay_ws_url" in content

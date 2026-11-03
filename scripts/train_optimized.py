@@ -16,6 +16,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
+_SRC = Path(__file__).resolve().parents[1] / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
 from core.config import load_training_config
 
 
@@ -84,7 +88,7 @@ def calculate_class_weights(data_yaml: Path) -> dict[str, float]:
     return weights
 
 
-def train_optimized(config_path: str = "config/training.yaml") -> None:
+def train_optimized(config_path: str = "src/config/training.yaml") -> None:
     """優化的訓練函數。"""
     from ultralytics import YOLO
 
@@ -183,7 +187,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="config/training.yaml",
+        default="src/config/training.yaml",
         help="訓練配置文件",
     )
     args = parser.parse_args()

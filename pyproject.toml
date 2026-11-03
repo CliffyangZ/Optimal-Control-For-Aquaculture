@@ -24,6 +24,8 @@ dependencies = [
     "pandas>=3.0.3",
     "rfdetr>=1.7.0",
     "streamlit>=1.35.0",
+    "streamlit-player>=0.1.5",
+    "plotly>=6.7.0",
 ]
 
 [project.optional-dependencies]
@@ -52,8 +54,11 @@ ml = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["config*", "core*", "pi_controller*", "streaming*", "validation*", "web*"]
+exclude = ["web.frontend*", "tests*"]
+namespaces = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["src"]
