@@ -1,3 +1,0 @@
-[submodule "pi_controller"]
-	path = src/pi_controller
-	url = https://github.com/CliffyangZ/pi_controller.git

@@ -156,7 +156,7 @@ def get_val_augmentation(img_size=832):
 
 ### 方案 C：更新 YAML 配置（簡單提升）
 
-編輯 `src/config/training.yaml`：
+編輯 `Depolyment/src/config/training.yaml`：
 
 ```yaml
 model:
@@ -235,7 +235,7 @@ erasing: 0.1      # 加強
 
 3. **或更新 YAML 配置**
    ```bash
-   # 編輯 src/config/training.yaml
+   # 編輯 Depolyment/src/config/training.yaml
    # 加入新增參數
    ```
 

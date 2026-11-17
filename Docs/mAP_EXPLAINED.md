@@ -237,7 +237,7 @@ mAP50       mAP75       mAP50-95
 ### 配置中的质量门槛
 
 ```yaml
-# src/config/training.yaml
+# Depolyment/src/config/training.yaml
 evaluation:
   thresholds:
     feed:

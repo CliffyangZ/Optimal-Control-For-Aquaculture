@@ -32,7 +32,7 @@ val_transform = get_validation_augmentation(img_size=832)
 
 ### 2️⃣ 訓練配置優化
 
-**✅ 已更新**：`src/config/training.yaml`
+**✅ 已更新**：`Depolyment/src/config/training.yaml`
 
 #### 數據增強參數
 
@@ -113,7 +113,7 @@ weights = {
 ```bash
 # 直接訓練（使用優化的配置）
 python -m ultralytics.yolo detect train \
-    data=data/datasets/combined/data.yaml \
+    data=Data/datasets/combined/data.yaml \
     model=yolo26s.pt \
     epochs=300 \
     imgsz=832 \
@@ -126,7 +126,7 @@ python -m ultralytics.yolo detect train \
 
 ```bash
 # 訓練 + 自動類別權重計算 + 詳細監控
-python scripts/train_optimized.py --config src/config/training.yaml
+python scripts/train_optimized.py --config Depolyment/src/config/training.yaml
 ```
 
 ### 方案 C：Python 代碼
@@ -136,7 +136,7 @@ from ultralytics import YOLO
 
 model = YOLO('yolo26s.pt')
 results = model.train(
-    data='data/datasets/combined/data.yaml',
+    data='Data/datasets/combined/data.yaml',
     epochs=300,
     imgsz=832,
     batch=16,
@@ -170,7 +170,7 @@ results = model.train(
 |-----|------|
 | `core/augmentation.py` | Albumentations 增強 pipeline |
 | `scripts/train_optimized.py` | 優化訓練腳本 |
-| `src/config/training.yaml` | 更新的訓練配置 |
+| `Depolyment/src/config/training.yaml` | 更新的訓練配置 |
 | `docs/DATA_AUGMENTATION_ADVANCED.md` | 詳細增強指南 |
 | `docs/OPTIMIZATION_SUMMARY.md` | 本文件 |
 
@@ -230,7 +230,7 @@ Epoch  GPU_mem  box_loss  cls_loss  dfl_loss  Instances  Size
 
 2. 📊 **監控結果**
    ```bash
-   tensorboard --logdir=results/runs/detect
+   tensorboard --logdir=Results/runs/detect
    ```
 
 3. 🔧 **根據結果調整**
@@ -240,7 +240,7 @@ Epoch  GPU_mem  box_loss  cls_loss  dfl_loss  Instances  Size
 
 4. 📈 **部署模型**
    ```bash
-   python train.py infer --model=results/runs/detect/aquaculture_optimized/weights/best.pt
+   python train.py infer --model=Results/runs/detect/aquaculture_optimized/weights/best.pt
    ```
 
 ---

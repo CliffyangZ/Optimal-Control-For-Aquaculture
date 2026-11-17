@@ -1,0 +1,74 @@
+# Benchmark configuration (spec 006). All runs share these values (FR-002/003/004).
+seed: 42
+
+paths:
+  datasets_root: Data/datasets
+  pretrained_root: models/pretrained
+  results_root: Results/benchmark
+
+# Class map: unified ids. feeding_fish: feeding-fish -> fish, pellet -> feed.
+classes: [debris, feed, fish, lumpfish]
+source_class_maps:
+  fishtracker_v2: {0: debris, 1: feed, 2: fish, 3: lumpfish}
+  feeding_fish: {0: fish, 1: feed}
+kpi_classes: [feed, fish]
+
+split:
+  seed: 42
+  fractions: {train: 0.6, val: 0.2, heldout_real: 0.2}
+
+# Shared training budget (plan default; confirm on the "s" runs, task T032)
+budget:
+  max_epochs: 100
+  patience: 20
+  effective_batch: 16
+  # Per-step micro-batch for an 8 GB GPU; gradient accumulation = effective_batch / micro_batch.
+  # Lower these (not imgsz) on CUDA OOM. Override per run with: train --micro-batch N
+  micro_batch:
+    yolo26: {n: 16, s: 16, m: 8}
+    rfdetr: {n: 8, s: 8, m: 4}
+    dfine:  {n: 8, s: 8, m: 4}
+imgsz: 640
+
+# Fixed post-processing (no per-model tuning)
+thresholds:
+  conf: 0.25
+  ap_conf_floor: 0.001
+  max_det: 300
+  nms_iou: 0.7
+  eval_iou: 0.5
+
+bootstrap:
+  B: 2000
+  seed: 123
+
+profile:
+  warmup: 50
+  iters: 200
+
+# Experiment tracking (set enabled: false to run offline)
+tracking:
+  wandb: {enabled: true, project: Aqua_CV_Project, entity: null}
+
+# YOLO26 augmentation / optimiser block is read from this file (spec: use existing training.yaml)
+yolo_training_yaml: Depolyment/src/config/training.yaml
+
+# Run matrix
+runs:
+  Y-n: {family: yolo26, size: n, pretrained: models/pretrained/yolo26/yolo26n.pt}
+  Y-s: {family: yolo26, size: s, pretrained: models/pretrained/yolo26/yolo26s.pt}
+  Y-m: {family: yolo26, size: m, pretrained: models/pretrained/yolo26/yolo26m.pt}
+  R-n: {family: rfdetr, size: n, pretrained: models/pretrained/rfdetr/rf-detr-nano.pth}
+  R-s: {family: rfdetr, size: s, pretrained: models/pretrained/rfdetr/rf-detr-small.pth}
+  R-m: {family: rfdetr, size: m, pretrained: models/pretrained/rfdetr/rf-detr-medium.pth}
+  D-n: {family: dfine, size: n, pretrained: models/pretrained/dfine/dfine-n}
+  D-s: {family: dfine, size: s, pretrained: models/pretrained/dfine/dfine-s}
+  D-m: {family: dfine, size: m, pretrained: models/pretrained/dfine/dfine-m}
+
+# Decision inputs (spec FR-012). fps_min is set by the team (task T057).
+decision:
+  feed_recall_min: 0.75
+  fps_min: null
+  severe_proportional_bias_slope: 0.25   # |slope| of (diff ~ mean) regarded as severe
+  recall_gap_elimination: 0.10           # same-size feed recall this far below best => eliminated
+  overfit_gap: 0.25                      # train F1 - heldout F1 above this => overfit

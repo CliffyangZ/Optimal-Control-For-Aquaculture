@@ -1,0 +1,105 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local weights / media roots
+yolo26n.pt
+yolo26s.pt
+Data/
+models/
+pi_controller.backup/
+Research/notebooks/
+wandb/
+
+# Virtual environments / tool caches
+.venv/
+venv/
+env/
+.claude/
+.opencode/
+.specify
+.agents/
+CLAUDE.md
+specs/
+uv.lock
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Streamlit local state
+.streamlit/secrets.toml
+
+# Local validation/runtime files
+Depolyment/src/validation/clips.local.yml
+*.log
+
+# Media and generated data (keep project branding assets)
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.npy
+*.npz
+*.jpg
+*.jpeg
+*.png
+!.github/Assets/
+!.github/Assets/**
+
+# ML training artifacts
+Data/datasets/
+Data/kfold/
+!**/.gitkeep
+
+# Node.js / frontend
+node_modules/
+Depolyment/src/web/frontend/dist/
+Depolyment/src/web/frontend/.vite/
+*.tsbuildinfo
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/
+
+# Results: keep lightweight reports; ignore regenerable / huge artifacts
+Results/outputs/
+Results/runs/
+Results/wandb/
+Results/benchmark/probe/
+Results/benchmark/splits/export/
+Results/benchmark/eval_sets/
+Results/benchmark/wandb/
+Results/benchmark/runs/**/weights/
+Results/benchmark/runs/**/*.pt
+Results/benchmark/runs/**/*.pth
+Results/benchmark/runs/**/*.ckpt
+Results/benchmark/runs/**/*.safetensors
+Results/benchmark/runs/**/wandb/
+Results/benchmark/runs/**/events.out.tfevents.*
+Results/benchmark/runs/**/predictions*.json
+
+# LaTeX / Office build leftovers under Paper/
+Paper/**/*.aux
+Paper/**/*.fls
+Paper/**/*.fdb_latexmk
+Paper/**/*.xdv
+Paper/**/*.synctex.gz
+Paper/**/*.log

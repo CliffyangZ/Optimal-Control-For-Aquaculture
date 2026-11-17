@@ -1,6 +1,6 @@
 # Spatiotemporal Ripple Detection Algorithm — v2
 
-水產養殖監控系統的水面活動偵測演算法（工業級版本）。實作於 [core/ripple_algo.py](../src/core/ripple_algo.py)。
+水產養殖監控系統的水面活動偵測演算法（工業級版本）。實作於 [core/ripple_algo.py](../Depolyment/src/core/ripple_algo.py)。
 
 > **v1 → v2 主要差異**：
 >
@@ -395,7 +395,7 @@ uv run main.py data/sample.mov --grid 8 --short-window 30 --mid-window 150
 
 | 區塊 | 函式 | 位置 |
 |---|---|---|
-| 設定 | `RippleAlgoConfig` | [core/ripple_algo.py](../src/core/ripple_algo.py) |
+| 設定 | `RippleAlgoConfig` | [core/ripple_algo.py](../Depolyment/src/core/ripple_algo.py) |
 | 結果 | `ActivityResult` | 同上 |
 | 前處理 | `_preprocess` | 同上 |
 | 反光 mask | `_specular_mask` | 同上 |

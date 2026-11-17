@@ -26,7 +26,7 @@
 ## 數據位置
 
 ```
-data/datasets/combined/
+Data/datasets/combined/
 ├── train/
 │   ├── images/     (399 images)
 │   └── labels/     (399 labels)
@@ -49,7 +49,7 @@ python -c "
 from ultralytics import YOLO
 model = YOLO('yolo26s.pt')
 results = model.train(
-    data='data/datasets/combined/data.yaml',
+    data='Data/datasets/combined/data.yaml',
     epochs=100,
     imgsz=832,
     batch=16,
@@ -58,7 +58,7 @@ results = model.train(
 "
 ```
 
-或修改 src/config/training.yaml：
+或修改 Depolyment/src/config/training.yaml：
 
 ```yaml
 dataset:
@@ -66,7 +66,7 @@ dataset:
   roboflow_project: fishtracker_v2
   roboflow_version: 1
   roboflow_format: yolo26
-  local_cache_dir: data/datasets/combined  # ← 改這裡
+  local_cache_dir: Data/datasets/combined  # ← 改這裡
 ```
 
 ### 2. 評估數據集
@@ -74,7 +74,7 @@ dataset:
 查看驗證報告：
 
 ```bash
-cat data/datasets/combined/validation_report.json
+cat Data/datasets/combined/validation_report.json
 ```
 
 ## 重要發現
@@ -148,7 +148,7 @@ class_weights = torch.tensor([sum(class_counts) / c for c in class_counts])
 class_weights = class_weights / class_weights.sum() * len(class_weights)
 
 results = model.train(
-    data='data/datasets/combined/data.yaml',
+    data='Data/datasets/combined/data.yaml',
     epochs=100,
     imgsz=832,
     batch=16,
@@ -160,7 +160,7 @@ results = model.train(
 
 ### 2. 數據增強參數
 
-建議在 src/config/training.yaml 中使用更激進的增強：
+建議在 Depolyment/src/config/training.yaml 中使用更激進的增強：
 
 ```yaml
 model:
@@ -183,7 +183,7 @@ model:
 
 ```python
 model.train(
-    data='data/datasets/combined/data.yaml',
+    data='Data/datasets/combined/data.yaml',
     epochs=100,
     imgsz=832,     # 較大的輸入尺寸可以更好檢測小對象
     device=0,
@@ -205,8 +205,8 @@ model.train(
 |-----|------|
 | `scripts/merge_datasets.py` | 合併 feed.yolo26 + FishTracker_v2 的主腳本 |
 | `scripts/preprocess_dataset.py` | 數據驗證和統計分析 |
-| `data/datasets/combined/data.yaml` | YOLO 訓練配置檔 |
-| `data/datasets/combined/validation_report.json` | 詳細驗證報告（JSON） |
+| `Data/datasets/combined/data.yaml` | YOLO 訓練配置檔 |
+| `Data/datasets/combined/validation_report.json` | 詳細驗證報告（JSON） |
 
 ## 故障排排除
 

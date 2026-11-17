@@ -13,7 +13,7 @@ import argparse
 import sys
 from pathlib import Path
 
-_SRC = Path(__file__).resolve().parent / "src"
+_SRC = Path(__file__).resolve().parent / "Depolyment" / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
@@ -268,18 +268,18 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_dl = sub.add_parser("download", help="Download dataset from Roboflow")
-    p_dl.add_argument("--config", type=Path, default=Path("src/config/training.yaml"))
+    p_dl.add_argument("--config", type=Path, default=Path("Depolyment/src/config/training.yaml"))
     p_dl.set_defaults(func=_cmd_download)
 
     p_tr = sub.add_parser("train", help="Train YOLO26 with wandb logging")
-    p_tr.add_argument("--config", type=Path, default=Path("src/config/training.yaml"))
+    p_tr.add_argument("--config", type=Path, default=Path("Depolyment/src/config/training.yaml"))
     p_tr.add_argument(
         "--no-wandb", action="store_true", help="Disable wandb logging entirely"
     )
     p_tr.set_defaults(func=_cmd_train)
 
     p_ev = sub.add_parser("evaluate", help="Evaluate model and apply quality gate")
-    p_ev.add_argument("--config", type=Path, default=Path("src/config/training.yaml"))
+    p_ev.add_argument("--config", type=Path, default=Path("Depolyment/src/config/training.yaml"))
     p_ev.add_argument("--runs-dir", type=Path, default=None, help="Override output directory (default: from config)")
     p_ev.set_defaults(func=_cmd_evaluate)
 
