@@ -109,31 +109,26 @@ Register a viewer and start the detection worker (if first viewer).
 ### POST /session/stop
 Unregister a viewer and stop the worker (if last viewer after idle delay).
 
-## Environment Variables
+## Runtime settings
 
-```bash
-STREAM_URL=rtsp://192.168.137.157:8554/cam
-SOURCE_ID=cam
-MEDIAMTX_HOST=192.168.137.157
-MEDIAMTX_WEBRTC_PORT=8889
-RFDETR_MODEL_PATH=models/rf-detr-fish-regular.pth
-RFDETR_DEVICE=auto              # "auto", "cuda", "cpu", "mps"
-RFDETR_CONFIDENCE_THRESHOLD=0.25
-STALE_OVERLAY_MS=3000
-TARGET_DETECTION_FPS=1
-```
+Edit `Depolyment/src/config/setting.py` (not `.env`) for stream / model / MediaMTX values:
+
+- `STREAM_URL`, `SOURCE_ID`, `MEDIAMTX_HOST`, `MEDIAMTX_WEBRTC_PORT`
+- `RFDETR_MODEL_PATH`, `RFDETR_DEVICE`, `RFDETR_CONFIDENCE_THRESHOLD`
+- `STALE_OVERLAY_MS`, `TARGET_DETECTION_FPS`
+
+`.env` is only for secrets such as `ROBOFLOW_API_KEY` / `WANDB_API_KEY`.
 
 ## Development
 
 Backend (with model):
 ```bash
-export RFDETR_MODEL_PATH=/path/to/model.pth
 uv run --group ml uvicorn web.app:app --reload
 ```
 
 Frontend (Vite dev server with API proxy):
 ```bash
-cd src/web/frontend
+cd Depolyment/src/web/frontend
 npm install
 npm run dev
 ```

@@ -1,0 +1,25 @@
+{
+  "classes": [
+    "debris",
+    "feed",
+    "fish",
+    "lumpfish"
+  ],
+  "source_class_maps": {
+    "fishtracker_v2": {
+      "0": "debris",
+      "1": "feed",
+      "2": "fish",
+      "3": "lumpfish"
+    },
+    "feeding_fish": {
+      "0": "fish",
+      "1": "feed"
+    }
+  },
+  "kpi_classes": [
+    "feed",
+    "fish"
+  ],
+  "hash": "4aa2efffa0b68a2bb2e2d99983022069f9c2aec1b6f2b3a2dff4c25c8fa9cbb6"
+}

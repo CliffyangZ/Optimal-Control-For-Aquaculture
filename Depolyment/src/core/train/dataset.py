@@ -2,7 +2,7 @@
 
 The dataset is pinned to a specific Roboflow version. After download, every image
 must have a matching YOLO `.txt` annotation. K-fold splits are written under
-`data/kfold/fold_{i}/` as symlinks (or copies on platforms without symlink support)
+`Data/kfold/fold_{i}/` as symlinks (or copies on platforms without symlink support)
 with companion `fold_{i}.yaml` files consumable directly by Ultralytics' `model.train()`.
 """
 

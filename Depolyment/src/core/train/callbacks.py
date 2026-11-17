@@ -161,7 +161,7 @@ def setup_wandb_mode(config: WandbConfig, *, disabled: bool = False) -> str:
         msg = (
             f"wandb unreachable ({exc}): running in offline mode. No cloud logging. "
             "Run `wandb login --relogin` with a valid key from https://wandb.ai/authorize, "
-            "then sync with: wandb sync results/wandb/latest-run/"
+            "then sync with: wandb sync Results/wandb/latest-run/"
         )
         log.warning(msg)
         print(f"[wandb] {msg}", flush=True)

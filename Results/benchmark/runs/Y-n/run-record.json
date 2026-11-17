@@ -1,0 +1,22 @@
+{
+  "budget": {
+    "effective_batch": 16,
+    "max_epochs": 100,
+    "patience": 20
+  },
+  "class_map_hash": "4aa2efffa0b68a2bb2e2d99983022069f9c2aec1b6f2b3a2dff4c25c8fa9cbb6",
+  "config_hash": "5b789225f88f0285e614243eead15d6e0575d8b1f682c4d670f1346378d7f109",
+  "eval_commit": "57b27e5",
+  "family": "yolo26",
+  "grad_accum_steps": 1,
+  "input_size": 640,
+  "micro_batch": 16,
+  "pretrained_path": "models/pretrained/yolo26/yolo26n.pt",
+  "run_id": "Y-n",
+  "seed": 42,
+  "size": "n",
+  "split_hash": "c82ee4d4bf173c77a76da93843833d4f6cd63179db5bb4d7ed683ede56314def",
+  "status": "evaluated",
+  "wandb_run_id": "0de9bu8d",
+  "weights_path": "results/benchmark/runs/Y-n/ultralytics/weights/best.pt"
+}

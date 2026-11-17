@@ -51,14 +51,16 @@ ml = [
     "scikit-learn>=1.5.0",
     "python-dotenv>=1.0.0",
     "albumentations>=1.4.0",
+    "pycocotools>=2.0.8",
+    "rfdetr[train,loggers]>=1.7.0",
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["Depolyment/src"]
 include = ["config*", "core*", "pi_controller*", "streaming*", "validation*", "web*"]
 exclude = ["web.frontend*", "tests*"]
 namespaces = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-pythonpath = ["src"]
+pythonpath = ["Depolyment/src"]

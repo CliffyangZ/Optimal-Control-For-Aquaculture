@@ -1,83 +1,43 @@
-# Aquaculture_CV_Project
+# Physical AI For Optimal Feeding Control
 
-## 開啟後端與前端
+<p align="center">
+  <img src=".github/Assets/logo.jpg" alt="Project logo: Physical AI feeding control loop" width="220"/>
+</p>
 
-### 後端
+<p align="center">
+  <em>A Physical AI Framework for Adaptive Feeding Based on Visual Feed Dynamics</em><br/>
+  Sin-Ze Yang, Cheng-Hsun Chuang, Yong-Xiang Chen*<br/>
+  Undergraduate Program in Intelligent Computing and Big Data,<br/>
+  Chung Yuan Christian University, Taiwan
+</p>
+
+## Abstract
+
+Adaptive aquaculture feeding requires feedback on how the environment responds to each dispensing action. This repository implements a **Physical AI** framework that closes a perception–action loop around visible-feed dynamics: object detection estimates residual pellets in a fixed surface region, a causal Kalman filter tracks the resulting area signal over time, and a bounded decision policy proposes the next portion subject to observation-quality and safety constraints. On the perception side, six YOLO26 and RF-DETR configurations are compared on a locked image hold-out; RF-DETR-m reaches the highest overall AP50–95 (0.363), while YOLO26-m / YOLO26-s lead feed-class F1 (0.66 / 0.64) with low local pipeline latency. These results motivate feed-specific model selection rather than multiclass AP alone. Remaining gaps—feed recall below a provisional 0.75 target, same-video split leakage risk, and unverified end-to-end feeding effectiveness—are treated as open validation items, not settled claims.
+
+## Introduction
+
+Excess feed raises production cost and organic loading. Fixed schedules cannot track appetite shifts driven by temperature, dissolved oxygen, fish size, or health. A feedback feeder therefore needs observations that can inform the *next* dispensing action—not only a static scene label.
+
+Beyond single-frame counts, the **change in visible feed after a portion** is a physical response of the tank surface. Interpreting that response needs (i) reliable temporal measurement and (ii) a calibrated link between disappearance and demand; detector accuracy alone establishes neither. In this project, *Physical AI* denotes the proposed loop in which dispensing alters the environment that the next decision observes: vision → causal estimation → bounded actuation, with the Raspberry Pi / BMduino prototype as the reference edge path and a server-side detector–controller as the decision host.
+
+This codebase separates concerns accordingly:
+
+- **`Depolyment/`** — monitoring web stack, RF-DETR inference path, streaming, and Pi controller integration.
+- **`Research/`** — model-comparison benchmark and analysis notebooks.
+- **`Results/`** — training / evaluation artifacts co-located with run logs.
+- **`Data/`** — datasets and media used by training and evaluation.
+- **`Paper/`** — manuscript sources for the accompanying technical report.
+
+The main contributions mirrored in software are: (1) a framework that ties visual feed dynamics to subsequent dispensing decisions; (2) a causal temporal estimator and bounded feeding policy with quality and safety gates; (3) an empirical comparison of six detectors focused on feed-class accuracy and efficiency for the perception module.
+
+## Quick start
 
 ```bash
-export RFDETR_MODEL_PATH=/absolute/path/to/rf-detr-fish.pth
-export STREAM_URL=rtsp://127.0.0.1:8554/cam
+# Runtime settings live in Depolyment/src/config/setting.py (not .env)
 uv run --group ml uvicorn web.app:app --host 0.0.0.0 --port 8000
+
+cd Depolyment/src/web/frontend && npm install && npm run dev
 ```
 
-後端啟動後可開啟 `http://localhost:8000`。
-
-### 前端
-
-```bash
-cd src/web/frontend
-npm install
-npm run dev
-```
-
-前端開發伺服器預設在 `http://localhost:5173`，API 會代理到 `http://localhost:8000`。
-
-### Inferencing cmd
-```bash
- uv run python train.py infer --model models/rf-detr-fish-regular.pth --source data/toilet_test.mp4 --model-type rfdetr --output results/outputs/test_toilets.mp4 --conf 0.3
-```
-
-
-### File Structure
-
-```text
-Aquaculture_CV_Project/
-├── .github/
-│   └── Assets/                                 # Architecture diagrams
-├── Docs/
-├── results/
-│   ├── outputs/                                # Inference outputs
-│   ├── runs/                                   # Training runs
-│   └── wandb/                                  # Weights & Biases local logs
-├── src/
-│   ├── config/
-│   │   └── setting.py                          # Stream and RF-DETR runtime settings
-│   ├── core/
-│   │   ├── infer/
-│   │   │   └── rfdetr_detector.py              # RF-DETR detection inference
-│   │   ├── models.py                           # Web session, stream, and detection statuses
-│   │   └── stream_health.py
-│   ├── drivers/
-│   │   └── README.md
-│   ├── pi_controller/                          # Raspberry Pi feed controller submodule
-│   ├── streaming/
-│   │   └── latest_frame_reader.py
-│   ├── validation/
-│   │   ├── clip_manifest.py
-│   │   └── run_clip_validation.py
-│   └── web/
-│       ├── app.py                              # FastAPI backend
-│       ├── detection_worker.py                 # Shared detection loop
-│       ├── overlay_hub.py                      # WebSocket broadcast hub
-│       ├── schemas.py                          # Pydantic API/WS schemas
-│       └── frontend/                           # React/Vite UI
-│           ├── src/
-│           └── dist/                           # Built for production serving
-└── tests/
-    ├── unit/
-    └── integration/
-```
-
-## YOLO Web Detection
-
-The project previously used YOLO-based object detection via a WebSocket overlay with `detections.v1` schema. This is **not the active web detection behavior** — the current production system uses RF-DETR for improved accuracy and performance on the target use case.
-
-## Hardware Components
-
-### The Brain
-- MPU (Rasperry Pi Zero 2W)
-- MCU (BMduino)
-- Camera (Rasperry Pi 5 IMX219 79.3 degree)
-
-
-[Detection Model Google Drive Link](https://drive.google.com/drive/folders/13WuaHYUf2__m-g2ha3vrVkBRIhlYSeEh?usp=drive_link)
+Secrets only (API keys) belong in `.env`; see `.env.example`.

@@ -21,7 +21,7 @@ import cv2
 import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC_ROOT = PROJECT_ROOT / "src"
+SRC_ROOT = PROJECT_ROOT / "Depolyment" / "src"
 for path in (SRC_ROOT, PROJECT_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))

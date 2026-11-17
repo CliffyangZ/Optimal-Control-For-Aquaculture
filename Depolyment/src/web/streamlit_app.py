@@ -1,10 +1,10 @@
 """Streamlit front-end for RF-DETR aquaculture monitoring.
 
 Run:
-    streamlit run src/web/streamlit_app.py
+    streamlit run Depolyment/src/web/streamlit_app.py
 
 Reads STREAM_URL, RFDETR_MODEL_PATH, RFDETR_DEVICE, and
-RFDETR_CONFIDENCE_THRESHOLD from .env (or environment).
+RFDETR_CONFIDENCE_THRESHOLD from config.setting (edit that file, not .env).
 """
 
 from __future__ import annotations

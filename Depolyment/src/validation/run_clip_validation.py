@@ -6,7 +6,7 @@ import cv2
 from pathlib import Path
 from datetime import datetime
 
-_SRC = Path(__file__).resolve().parents[1]
+_SRC = Path(__file__).resolve().parents[1]  # Depolyment/src
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 

@@ -16,10 +16,6 @@ def _load_dotenv(env_path: Path = Path(".env")) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def _env_int(name: str, default: int) -> int:
-    return int(os.environ.get(name, str(default)))
-
-
 def _stream_source_id(stream_url: str, default: str) -> str:
     parsed = urlparse(stream_url)
     path = parsed.path.strip("/")
@@ -32,35 +28,37 @@ def _stream_host(stream_url: str, default: str) -> str:
 
 _load_dotenv()
 
-# Stream Source
-DEFAULT_STREAM_URL = "rtsp://127.0.0.1:8554/cam"
-STREAM_URL = os.environ.get("STREAM_URL", DEFAULT_STREAM_URL)
+# Stream / model runtime — edit here (not via .env).
+# The web app requires an explicit approved local model path; it does not
+# fall back to bundled base weights when this path is missing or invalid.
+STREAM_URL = "rtsp://192.168.137.157:8554/cam"
 TARGET_WIDTH = 640
 TARGET_HEIGHT = 640
 TARGET_DISPLAY_FPS = 30
 TARGET_DETECTION_FPS = 1  # RF-DETR inference ~1.2s per frame, targeting 1 FPS max
 INTERRUPTION_TIMEOUT_SECONDS = 3
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-VALIDATION_MANIFEST_PATH = str(_PROJECT_ROOT / "src" / "validation" / "clips.local.yml")
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_DEPLOY_SRC = _PROJECT_ROOT / "Depolyment" / "src"
+VALIDATION_MANIFEST_PATH = str(_DEPLOY_SRC / "validation" / "clips.local.yml")
 LOCAL_TRUSTED_NETWORK_ONLY = True
 
-# Stream / WebRTC / HLS
-SOURCE_ID = os.environ.get("SOURCE_ID", _stream_source_id(STREAM_URL, "cam"))
-MEDIAMTX_HOST = os.environ.get("MEDIAMTX_HOST", _stream_host(STREAM_URL, "127.0.0.1"))
-MEDIAMTX_WEBRTC_PORT = _env_int("MEDIAMTX_WEBRTC_PORT", 8889)
-MEDIAMTX_HLS_PORT = _env_int("MEDIAMTX_HLS_PORT", 8888)
+# Stream / WebRTC / HLS (SOURCE_ID / MEDIAMTX_HOST derived from STREAM_URL)
+SOURCE_ID = _stream_source_id(STREAM_URL, "cam")
+MEDIAMTX_HOST = _stream_host(STREAM_URL, "127.0.0.1")
+MEDIAMTX_WEBRTC_PORT = 8889
+MEDIAMTX_HLS_PORT = 8888
 WEBRTC_PATH_TEMPLATE = "/{source_id}/whep"
 HLS_PATH_TEMPLATE = "/{source_id}/index.m3u8"
 
 # Overlay / WebSocket
-STALE_OVERLAY_MS = _env_int("STALE_OVERLAY_MS", 3000)
+STALE_OVERLAY_MS = 3000
 OVERLAY_HUB_QUEUE_MAXSIZE = 5  # Increased to prevent message loss during slow inference
 
 # Approved RF-DETR web recognition
-RFDETR_MODEL_PATH = os.environ.get("RFDETR_MODEL_PATH", "")
-RFDETR_DEVICE = os.environ.get("RFDETR_DEVICE", "auto")
-RFDETR_CONFIDENCE_THRESHOLD = float(os.environ.get("RFDETR_CONFIDENCE_THRESHOLD", "0.25"))
+RFDETR_MODEL_PATH = "models/rf-detr-fish.pth"
+RFDETR_DEVICE = "auto"
+RFDETR_CONFIDENCE_THRESHOLD = 0.25
 
 # Legacy YOLO training/experimentation settings. The rebuilt web detector uses
 # RFDETR_MODEL_PATH instead.
@@ -76,7 +74,7 @@ IDLE_SHUTDOWN_DELAY_SECONDS = 10
 # Backend defaults
 BACKEND_HOST = "0.0.0.0"
 BACKEND_PORT = 8000
-FRONTEND_DIST_DIR = str(_PROJECT_ROOT / "src" / "web" / "frontend" / "dist")
+FRONTEND_DIST_DIR = str(_DEPLOY_SRC / "web" / "frontend" / "dist")
 
 # Pi controller API (used by Streamlit Feed button)
 PI_CONTROLLER_URL = os.environ.get("PI_CONTROLLER_URL", "http://127.0.0.1:18080")

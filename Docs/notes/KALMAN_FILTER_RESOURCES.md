@@ -242,7 +242,7 @@
 - **`core/infer/detector.py`** - YOLO 推理包裝
 
 ### 配置檔案
-- **`src/config/training.yaml`** - 訓練配置
+- **`Depolyment/src/config/training.yaml`** - 訓練配置
 - **`pyproject.toml`** - 專案依賴
 
 ---

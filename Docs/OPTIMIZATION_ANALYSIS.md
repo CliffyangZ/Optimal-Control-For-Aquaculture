@@ -69,7 +69,7 @@
 
 **选项A**（推荐）：增强yolo26s的训练过程
 ```yaml
-# src/config/training.yaml - 保持当前模型
+# Depolyment/src/config/training.yaml - 保持当前模型
 model:
   weights: yolo26s.pt  # 继续用S，但优化训练
   batch: 16            # 关键：增加batch (见 2.1.2)
@@ -427,7 +427,7 @@ Week 4:
 
 ### 立即可执行的更改
 
-**1. 更新src/config/training.yaml**：
+**1. 更新Depolyment/src/config/training.yaml**：
 ```yaml
 model:
   weights: yolo26s.pt  # 保持S版本，通过训练优化
@@ -449,7 +449,7 @@ results = self._model(
 )
 ```
 
-**3. 在src/config/training.yaml的model.train()中添加**：
+**3. 在Depolyment/src/config/training.yaml的model.train()中添加**：
 ```yaml
 model:
   # ... 现有配置
@@ -560,7 +560,7 @@ Key_Metrics:
 
 ✅ **立即行动**：
 1. 备份当前配置
-2. 更新src/config/training.yaml（batch, imgsz, epochs）
+2. 更新Depolyment/src/config/training.yaml（batch, imgsz, epochs）
 3. 运行第一个fold测试验证显存够用
 4. 开始完整的5折训练
 

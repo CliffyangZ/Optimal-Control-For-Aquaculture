@@ -1,6 +1,6 @@
 """Training/inference configuration loader.
 
-Reads `src/config/training.yaml` into typed dataclasses and loads `.env` for
+Reads `Depolyment/src/config/training.yaml` into typed dataclasses and loads `.env` for
 API credentials (Roboflow, wandb).
 """
 
@@ -94,11 +94,11 @@ def _load_dotenv(env_path: Path) -> None:
 
 
 def load_training_config(
-    path: str | Path = "src/config/training.yaml",
+    path: str | Path = "Depolyment/src/config/training.yaml",
     *,
     env_path: str | Path = ".env",
 ) -> TrainingConfig:
-    """Parse `src/config/training.yaml` and load `.env` API keys into the environment."""
+    """Parse `Depolyment/src/config/training.yaml` and load `.env` API keys into the environment."""
     _load_dotenv(Path(env_path))
 
     with open(path, "r", encoding="utf-8") as f:
@@ -117,7 +117,7 @@ def load_training_config(
     model = ModelConfig(
         weights=m["weights"],
         variant=m["variant"],
-        output_dir=m.get("output_dir", "results/runs/train"),
+        output_dir=m.get("output_dir", "Results/runs/train"),
         epochs=int(m["epochs"]),
         batch=int(m["batch"]),
         imgsz=int(m["imgsz"]),

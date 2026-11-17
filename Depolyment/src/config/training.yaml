@@ -3,12 +3,12 @@ dataset:
   roboflow_project: fishtracker_v2
   roboflow_version: 1
   roboflow_format: yolo26
-  local_cache_dir: data/datasets/combined
+  local_cache_dir: Data/datasets/combined
 
 model:
   weights: yolo26s.pt
   variant: yolo26s
-  output_dir: results/runs/train
+  output_dir: Results/runs/train
   epochs: 300
   batch: 16
   imgsz: 832
