@@ -79,6 +79,8 @@ Thumbs.db
 .vscode/
 .idea/
 
+
+
 # Results: keep lightweight reports; ignore regenerable / huge artifacts
 Results/outputs/
 Results/runs/
