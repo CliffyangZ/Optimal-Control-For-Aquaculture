@@ -96,6 +96,9 @@ Results/benchmark/runs/**/wandb/
 Results/benchmark/runs/**/events.out.tfevents.*
 Results/benchmark/runs/**/predictions*.json
 
+
+TODO.md
+Paper/
 # LaTeX / Office build leftovers under Paper/
 Paper/**/*.aux
 Paper/**/*.fls
